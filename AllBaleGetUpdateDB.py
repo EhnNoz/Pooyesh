@@ -17,15 +17,47 @@ DATABASE_URI = "postgresql://postgres:R12345eza@10.32.141.8/Ehsan"
 engine = create_engine(DATABASE_URI, pool_size=20, max_overflow=100)
 
 
-def get_all_updates(offset: int = 0) -> List[Dict[str, Any]]:
-    """دریافت تمام آپدیت‌ها از تلگرام"""
-    params = {'offset': offset, 'timeout': 5}
-    try:
-        response = requests.get(f"{BASE_URL}/getUpdates", params=params)
-        response.raise_for_status()
-        return response.json().get('result', [])
-    except requests.exceptions.RequestException as e:
-        print(f"خطا در دریافت پیام‌ها: {e}")
+def get_all_updates(offset: int = 0, limit: int = 100) -> List[Dict[str, Any]]:
+    """دریافت تمام آپدیت‌ها با مدیریت offset چندگانه"""
+    all_results = []
+
+    while True:
+        params = {'offset': offset, 'timeout': 10}
+        try:
+            response = requests.get(f"{BASE_URL}/getUpdates", params=params)
+            response.raise_for_status()
+            results = response.json().get('result', [])
+
+            if not results:
+                print("هیچ آپدیتی موجود نیست.")
+                break
+
+            all_results.extend(results)
+            offset = results[-1]['update_id'] + 1  # به‌روزرسانی offset برای درخواست بعدی
+
+            print(f"دریافت {len(results)} آپدیت دیگر. جمع کل: {len(all_results)}")
+
+        except requests.exceptions.RequestException as e:
+            print(f"خطا در دریافت پیام‌ها: {e}")
+            break
+
+    return all_results
+
+
+def get_new_updates() -> List[Dict[str, Any]]:
+    """دریافت آپدیت‌های جدید با مدیریت offset"""
+    last_update_id = get_last_update_id_from_db()
+    print(f"آخرین update_id در دیتابیس: {last_update_id}")
+
+    # دریافت آپدیت‌ها از نقطه‌ی بعد از آخرین update_id
+    updates = get_all_updates(offset=last_update_id + 1)
+
+    if updates:
+        new_offset = updates[-1].get('update_id') + 1
+        print(f"{len(updates)} آپدیت جدید دریافت شد. جدیدترین offset: {new_offset}")
+        return updates
+    else:
+        print("آپدیت جدیدی وجود ندارد.")
         return []
 
 
@@ -58,7 +90,7 @@ def extract_forward_info(message: Dict[str, Any]) -> Dict[str, Any]:
                                  message['forward_from'].get('last_name', ''),
             'forward_from_username': message['forward_from'].get('username'),
             'forward_date': datetime.fromtimestamp(message['forward_date']).strftime('%Y-%m-%d %H:%M:%S')
-            if 'forward_date' in message else None
+            if message.get('forward_date') else None
         })
 
     if 'forward_from_chat' in message:
@@ -91,7 +123,7 @@ def extract_message_data(update: Dict[str, Any]) -> Dict[str, Any]:
     message_data = {
         'update_id': update['update_id'],
         'message_id': message.get('message_id'),
-        'date': datetime.fromtimestamp(message.get('date')).strftime('%Y-%m-%d %H:%M:%S'),
+        'date': datetime.fromtimestamp(message['date']).strftime('%Y-%m-%d %H:%M:%S') if message.get('date') else None,
         'chat_id': chat.get('id'),
         'chat_type': chat.get('type'),
         'chat_title': chat.get('title'),
@@ -150,9 +182,13 @@ def save_to_excel(df: pd.DataFrame, filename: str = "telegram_messages.xlsx"):
 
 def get_last_update_id_from_db() -> int:
     """دریافت آخرین update_id از دیتابیس"""
-    with engine.connect() as conn:
-        result = conn.execute(text("SELECT MAX(update_id) FROM telegram_messages")).fetchone()[0]
-        return result if result else 0
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT MAX(update_id) FROM telegram_messages")).fetchone()[0]
+            return int(result) if result is not None else 0
+    except Exception as e:
+        print(f"خطا در خواندن از دیتابیس: {e}")
+        return 0
 
 
 def save_to_database(df: pd.DataFrame):
@@ -166,30 +202,42 @@ def save_to_database(df: pd.DataFrame):
 
 
 def main():
-    print("دریافت پیام‌ها از تلگرام و ساخت دیتافریم...")
+    print("در حال دریافت آپدیت‌های جدید از Bale...")
 
-    last_update_id = get_last_update_id_from_db()
-    print(f"آخرین update_id در دیتابیس: {last_update_id}")
-
-    all_updates = get_all_updates(offset=last_update_id + 1)
+    all_updates = get_new_updates()
 
     if all_updates:
-        print(f"تعداد کل آپدیت‌های دریافت شده: {len(all_updates)}")
-
         messages_df = create_messages_dataframe(all_updates)
 
         if not messages_df.empty:
-            print("\nنمونه‌ای از داده‌های استخراج شده:")
+            print("\n✅ نمونه‌ای از داده‌های استخراج شده:")
             print(messages_df.head())
 
             save_to_excel(messages_df)
             save_to_database(messages_df)
-
         else:
-            print("هیچ پیام معتبری برای نمایش یافت نشد.")
+            print("⚠️ هیچ پیام معتبری استخراج نشد.")
     else:
-        print("هیچ آپدیتی دریافت نشد.")
+        print("❌ هیچ آپدیت جدیدی دریافت نشد.")
 
 
 if __name__ == "__main__":
     main()
+
+# def run_polling():
+#     print("Polling شروع شد...")
+#     while True:
+#         last_offset = get_last_offset_from_db()
+#         updates = get_updates(offset=last_offset + 1)
+#
+#         if updates:
+#             process_updates(updates)
+#             new_offset = updates[-1]['update_id'] + 1
+#             save_offset_to_db(new_offset)
+#             print(f"آخرین update_id: {new_offset}")
+#
+#         # منتظر بمانید قبل از درخواست بعدی (برای جلوگیری از overload)
+#         time.sleep(1)
+#
+# if __name__ == "__main__":
+#     run_polling()
