@@ -1,8 +1,14 @@
 from balethon.objects import InlineKeyboard, InlineKeyboardButton, ReplyKeyboardButton, ReplyKeyboard
 from balethon import Client
 from balethon.conditions import private
+import os
+import logging
+# logging.basicConfig(level=logging.INFO)
 
-bot = Client("2136694931:ac29epH3lKrG2n7gUzEtmyv1l9IXrRkPhBK4VwqV")
+bot = Client("388773998:FOyKJ2cDpOC7LnG4NL5Dl5eg8ou7zC3VyDPWp7B9")
+
+if not os.path.exists('user_uploads'):
+    os.makedirs('user_uploads')
 
 # منوی اصلی
 main_menu = InlineKeyboard(
@@ -56,11 +62,36 @@ async def handle_message(message):
             return
 
         elif current_step == "portfolio":
-            user_data[user_id]["portfolio"] = message.text
+            # دریافت نمونه کار (متن یا فایل)
+            if message.text:
+                portfolio = message.text
+            elif message.document:
+                # روش سازگار با Balethon برای دریافت اطلاعات فایل
+                file_id = message.document.id  # در Balethon ممکن است file_id به این شکل باشد
+                file_name = getattr(message.document, 'file_name', getattr(message.document, 'name', 'بدون نام'))
+                portfolio = f"فایل: {file_name} (ID: {file_id})"
+            elif message.photo:
+                # برای عکس‌ها در Balethon
+                photo = message.photo[-1] if isinstance(message.photo, list) else message.photo
+                portfolio = f"عکس (ID: {photo.id})"
+            elif message.video:
+                portfolio = f"ویدئو (ID: {message.video.id})"
+            else:
+                portfolio = "بدون نمونه کار"
+
+            user_data[user_id]["portfolio"] = portfolio
             role = user_data[user_id]["role"]
             sub_role = user_data[user_id]["sub_role"]
             name = user_data[user_id]["name"]
             experience = user_data[user_id]["experience"]
+
+            # چاپ لاگ نهایی
+            print(f"✅ Final Data Submitted by User {user_id}:")
+            print(f"Role: {role}")
+            print(f"Sub-role: {sub_role}")
+            print(f"Name: {name}")
+            print(f"Experience: {experience}")
+            print(f"Portfolio: {portfolio}")
 
             await message.reply(
                 f"✅ اطلاعات شما ثبت شد:\n\n"
@@ -68,6 +99,7 @@ async def handle_message(message):
                 f"🔹 تخصص: {sub_role}\n"
                 f"👤 نام: {name}\n"
                 f"📅 سابقه کار: {experience}\n"
+                f"📂 نمونه کار: {portfolio}\n\n"
                 "متشکرم! به زودی با شما تماس می‌گیریم."
             )
             del user_data[user_id]
@@ -121,6 +153,7 @@ async def handle_callback_query(callback_query):
             chat_id=callback_query.message.chat.id,
             text="لطفاً نام کامل خود را وارد کنید:"
         )
+
 
 
 bot.run()
