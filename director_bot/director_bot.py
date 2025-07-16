@@ -1,9 +1,12 @@
 import os
 import re
 import sys
-import sqlite3
 import subprocess
 from datetime import datetime
+from balethon import Client
+import psycopg2
+from psycopg2 import sql
+from psycopg2.extras import DictCursor
 
 # نصب mutagen در صورت نیاز
 try:
@@ -12,44 +15,55 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "mutagen"])
     from mutagen import File as MediaFile
 
-from balethon import Client
+# تنظیمات اتصال به PostgreSQL
+POSTGRES_CONFIG = {
+    "dbname": "",
+    "user": "",
+    "password": "",
+    "host": "",
+    "port": ""
+}
+def get_db_connection():
+    return psycopg2.connect(**POSTGRES_CONFIG)
+
+def create_table():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS submissions (
+        id SERIAL PRIMARY KEY,
+        chat_id BIGINT,
+        username VARCHAR(255),
+        full_name VARCHAR(255),
+        city VARCHAR(255),
+        language_code VARCHAR(10),
+        is_bot BOOLEAN,
+        role VARCHAR(255),
+        sub_role VARCHAR(255),
+        age INTEGER,
+        phone_number VARCHAR(20),
+        sample_type VARCHAR(255),
+        sample_text TEXT,
+        file_path TEXT,
+        file_duration VARCHAR(50),
+        message_date TIMESTAMP,
+        message_id BIGINT
+    )
+    """)
+    conn.commit()
+    cursor.close()
+    conn.close()
 
 # مسیر پوشه‌های دسته‌بندی شده برای فایل‌ها
 UPLOAD_ROOT = "uploads"
 for f in ["video", "image", "text", "audio", "other"]:
     os.makedirs(os.path.join(UPLOAD_ROOT, f), exist_ok=True)
 
-# اتصال به دیتابیس
-if os.path.exists("data.db"):
-    os.remove("data.db")
-
-conn = sqlite3.connect("data.db", check_same_thread=False)
-cursor = conn.cursor()
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS submissions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id INTEGER,
-    username TEXT,
-    full_name TEXT,
-    city TEXT,
-    language_code TEXT,
-    is_bot BOOLEAN,
-    role TEXT,
-    sub_role TEXT,
-    age INTEGER,
-    phone_number TEXT,
-    sample_type TEXT,
-    sample_text TEXT,
-    file_path TEXT,
-    file_duration TEXT,
-    message_date TEXT,
-    message_id INTEGER
-)
-""")
-conn.commit()
+# ایجاد جدول در PostgreSQL
+create_table()
 
 # توکن بات
-TOKEN = "2136694931:ac29epH3lKrG2n7gUzEtmyv1l9IXrRkPhBK4VwqV"
+TOKEN = ""
 bot = Client(TOKEN)
 user_states = {}
 
@@ -124,20 +138,16 @@ sample_type_keyboard = {
     "one_time_keyboard": True
 }
 
-
 # ✅ اعتبارسنجی‌های مرحله‌ای
 def is_persian(text):
     return bool(re.fullmatch(r"[آ-ی‌\s]+", text.strip()))
 
-
 def is_valid_age(text):
-    return text.isdigit() and 1 <= int(text) <= 99
-
+    return text.isdigit() and 1 <= int(text) <= 150
 
 def is_valid_phone(text):
     digits = re.sub(r"\D", "", text)
     return len(digits) >= 11
-
 
 # تابع برای تشخیص زیرمنوها
 def is_submenu_option(text):
@@ -149,7 +159,6 @@ def is_submenu_option(text):
     ]
     return text in submenu_options
 
-
 # 🎬 استخراج متادیتای فایل (مدت زمان ویدیویی یا صوتی)
 def extract_metadata(path):
     try:
@@ -158,7 +167,6 @@ def extract_metadata(path):
         return str(round(duration)) + "s" if duration else None
     except Exception:
         return None
-
 
 @bot.on_message()
 async def handle_message(client, message):
@@ -184,7 +192,6 @@ async def handle_message(client, message):
                 user_data["step"] = prev_step
                 user_states[chat_id] = user_data
 
-                # تبدیل نام مرحله به فارسی برای پیام
                 step_names = {
                     "role": "نقش",
                     "full_name": "نام کامل",
@@ -197,7 +204,7 @@ async def handle_message(client, message):
                 persian_step_name = step_names.get(prev_step, prev_step)
 
                 await message.reply(f"↩️ لطفاً مرحله *{persian_step_name}* را مجدداً وارد نمایید:",
-                                    reply_markup=back_keyboard)
+                                  reply_markup=back_keyboard)
             else:
                 await message.reply("⚠️ مرحله قبلی موجود نیست.")
         return
@@ -211,7 +218,6 @@ async def handle_message(client, message):
 
     # پردازش زیرمنوها
     if is_submenu_option(text):
-        # تعیین نقش اصلی بر اساس زیرمنوی انتخاب شده
         if "تهیه کننده" in text:
             user_data["role"] = "تهیه کننده"
         elif "نویسنده" in text:
@@ -221,10 +227,7 @@ async def handle_message(client, message):
         elif "تدوینگر" in text:
             user_data["role"] = "تدوینگر"
 
-        # ذخیره زیرمنوی انتخاب شده به عنوان تخصص
         user_data["sub_role"] = text
-
-        # انتقال مستقیم به مرحله وارد کردن نام
         user_data["step"] = "full_name"
         user_states[chat_id] = user_data
         await message.reply("🧒 لطفاً نام و نام خانوادگی خود را فقط به فارسی وارد فرمایید:", reply_markup=back_keyboard)
@@ -247,50 +250,68 @@ async def handle_message(client, message):
 
         user_data["file_path"] = full_path
         user_data["file_duration"] = extract_metadata(full_path)
-        user_data["message_date"] = datetime.fromtimestamp(message.date.timestamp()).isoformat()
+        user_data["message_date"] = datetime.fromtimestamp(message.date.timestamp())
         user_data["message_id"] = message.id
 
-        cursor.execute("""
-            INSERT INTO submissions (
-                chat_id, username, full_name, city, language_code, is_bot,
-                role, sub_role, age, phone_number, sample_type, sample_text,
-                file_path, file_duration, message_date, message_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            user.id, user.username, user_data["full_name"], user_data["city"],
-            user.language_code, user.is_bot, user_data["role"], user_data.get("sub_role"),
-            user_data["age"], user_data["phone"], user_data["sample_type"], None,
-            user_data["file_path"], user_data["file_duration"],
-            user_data["message_date"], user_data["message_id"]
-        ))
-        conn.commit()
-
-        await message.reply("✅ فایل شما با موفقیت دریافت و ثبت شد.\n🙏 از همکاری شما صمیمانه سپاسگزاریم.")
-        user_states[chat_id] = {}
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("""
+                INSERT INTO submissions (
+                    chat_id, username, full_name, city, language_code, is_bot,
+                    role, sub_role, age, phone_number, sample_type, sample_text,
+                    file_path, file_duration, message_date, message_id
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                user.id, user.username, user_data["full_name"], user_data["city"],
+                user.language_code, user.is_bot, user_data["role"], user_data.get("sub_role"),
+                user_data["age"], user_data["phone"], user_data["sample_type"], None,
+                user_data["file_path"], user_data["file_duration"],
+                user_data["message_date"], user_data["message_id"]
+            ))
+            conn.commit()
+            await message.reply("✅ فایل شما با موفقیت دریافت و ثبت شد.\n🙏 از همکاری شما صمیمانه سپاسگزاریم.")
+        except Exception as e:
+            conn.rollback()
+            await message.reply("⚠️ خطایی در ثبت اطلاعات رخ داد. لطفاً مجدداً تلاش کنید.")
+            print(f"Database error: {e}")
+        finally:
+            cursor.close()
+            conn.close()
+            user_states[chat_id] = {}
         return
 
     # 📝 دریافت متن نمونه‌کار
     if user_data.get("step") == "sample_input" and user_data.get("sample_type") == "متن":
         user_data["sample_text"] = text
-        user_data["message_date"] = datetime.fromtimestamp(message.date.timestamp()).isoformat()
+        user_data["message_date"] = datetime.fromtimestamp(message.date.timestamp())
         user_data["message_id"] = message.id
 
-        cursor.execute("""
-            INSERT INTO submissions (
-                chat_id, username, full_name, city, language_code, is_bot,
-                role, sub_role, age, phone_number, sample_type, sample_text,
-                message_date, message_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            user.id, user.username, user_data["full_name"], user_data["city"],
-            user.language_code, user.is_bot, user_data["role"], user_data.get("sub_role"),
-            user_data["age"], user_data["phone"], user_data["sample_type"], user_data["sample_text"],
-            user_data["message_date"], user_data["message_id"]
-        ))
-        conn.commit()
-
-        await message.reply("✅ نمونه‌کار متنی شما با موفقیت ثبت شد.\n🙏 از همراهی شما متشکریم.")
-        user_states[chat_id] = {}
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("""
+                INSERT INTO submissions (
+                    chat_id, username, full_name, city, language_code, is_bot,
+                    role, sub_role, age, phone_number, sample_type, sample_text,
+                    message_date, message_id
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                user.id, user.username, user_data["full_name"], user_data["city"],
+                user.language_code, user.is_bot, user_data["role"], user_data.get("sub_role"),
+                user_data["age"], user_data["phone"], user_data["sample_type"], user_data["sample_text"],
+                user_data["message_date"], user_data["message_id"]
+            ))
+            conn.commit()
+            await message.reply("✅ نمونه‌کار متنی شما با موفقیت ثبت شد.\n🙏 از همراهی شما متشکریم.")
+        except Exception as e:
+            conn.rollback()
+            await message.reply("⚠️ خطایی در ثبت اطلاعات رخ داد. لطفاً مجدداً تلاش کنید.")
+            print(f"Database error: {e}")
+        finally:
+            cursor.close()
+            conn.close()
+            user_states[chat_id] = {}
         return
 
     # 🎯 مراحل فرم مرحله‌ای
@@ -298,7 +319,6 @@ async def handle_message(client, message):
 
     if step == "role":
         user_data["role"] = text
-        # نمایش منوی فرعی بر اساس نقش انتخاب شده
         if text == "تهیه کننده":
             await message.reply("لطفاً تخصص خود را انتخاب کنید:", reply_markup=producer_submenu)
         elif text == "نویسنده":
@@ -317,19 +337,18 @@ async def handle_message(client, message):
             return
         user_data["full_name"] = text
         user_data["step"] = "city"
-        await message.reply("🏙️ لطفاً شهر محل سکونت خود را وارد فرمایید:",
-                            reply_markup=back_keyboard)
+        await message.reply("🏙️ لطفاً شهر محل سکونت خود را وارد فرمایید:", reply_markup=back_keyboard)
     elif step == "city":
         if not text:
             await message.reply("⚠️ لطفاً شهر خود را وارد کنید.", reply_markup=back_keyboard)
             return
         user_data["city"] = text
         user_data["step"] = "age"
-        await message.reply("🎂 لطفاً سن خود را بصورت عددی وارد فرمایید:", reply_markup=back_keyboard)
+        await message.reply("🎂 لطفاً سن خود را با عدد صحیح بین ۱ تا ۱۵۰ وارد فرمایید:", reply_markup=back_keyboard)
     elif step == "age":
         if not is_valid_age(text):
-            await message.reply("⚠️ عدد واردشده صحیح نیست.",
-                                reply_markup=back_keyboard)
+            await message.reply("⚠️ عدد واردشده صحیح نیست. لطفاً سنی بین ۱ تا ۱۵۰ وارد کنید.",
+                              reply_markup=back_keyboard)
             return
         user_data["age"] = int(text)
         user_data["step"] = "phone"
@@ -358,7 +377,6 @@ async def handle_message(client, message):
         await message.reply(prompt, reply_markup=back_keyboard)
 
     user_states[chat_id] = user_data
-
 
 print("🚀 بات با موفقیت اجرا شد و آماده دریافت اطلاعات کاربران محترم است...")
 bot.run()
