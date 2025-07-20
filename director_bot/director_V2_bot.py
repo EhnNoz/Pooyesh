@@ -44,6 +44,7 @@ def create_table():
             file_path TEXT,
             file_size TEXT,
             phone_number TEXT,
+            social_link TEXT,
             message_date TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -103,9 +104,56 @@ phone_keyboard = {
     "one_time_keyboard": True
 }
 
+social_link_keyboard = {
+    "keyboard": [["ندارم"], ["↩️ بازگشت"], ["🔄 شروع مجدد"]],
+    "resize_keyboard": True,
+    "one_time_keyboard": True
+}
+
 # 🎭 نقش‌ها و ریزنقش‌ها
-roles = ["تهیه کننده", "نویسنده", "کارگردان", "تدوینگر"]
-subroles = {role: [f"{role} {i}" for i in range(1, 7)] for role in roles}
+roles = [
+    "تولیدکننده ویدیوی کوتاه (ریل)",
+    "بلاگر(راوی)",
+    "گرافیست (ثابت و متحرک)",
+    "پادکستر",
+    "کاریکاتوریست",
+    "عکاس",
+    "اجراکننده استندآپ کمدی",
+    "ایده‌پرداز",
+    "بازی‌ساز/برنامه‌نویس موبایل",
+    "خبرنگار",
+    "نویسنده"
+]
+
+subroles = {
+    "خبرنگار": [
+        "سیاسی",
+        "اجتماعی",
+        "فرهنگی",
+        "علمی",
+        "فن‌آوری",
+        "سایر"
+    ],
+    "نویسنده": [
+        "مقاله",
+        "داستان",
+        "فیلمنامه",
+        "طنز",
+        "تحلیل",
+        "یادداشت",
+        "سایر"
+    ],
+    # برای سایر نقش‌ها لیست خالی می‌گذاریم
+    "تولیدکننده ویدیوی کوتاه (ریل)": [],
+    "بلاگر(راوی)": [],
+    "گرافیست (ثابت و متحرک)": [],
+    "پادکستر": [],
+    "کاریکاتوریست": [],
+    "عکاس": [],
+    "اجراکننده استندآپ کمدی": [],
+    "ایده‌پرداز": [],
+    "بازی‌ساز/برنامه‌نویس موبایل": []
+}
 
 # 👤 جنسیت
 gender_options = ["زن", "مرد"]
@@ -165,25 +213,31 @@ async def handle_message(client, message):
 
     if text in ["/start", "شروع", "🔄 شروع مجدد"]:
         user_states[chat_id] = {"step": "role"}
-        await message.reply("🎭 نقش خود را انتخاب کنید:",
+        await message.reply("🎭 لطفاً نقش خود را انتخاب کنید:",
                             reply_markup=make_keyboard(roles, per_row=2, include_back=False))
         return
 
     if text == "↩️ بازگشت":
         previous_steps = {
-            "subrole": "role", "gender": "subrole", "age_range": "gender",
-            "province": "age_range", "phone": "province", "sample_type": "phone"
+            "social_link": "phone",
+            "sample_type": "social_link",
+            "subrole": "role",
+            "gender": "subrole",
+            "age_range": "gender",
+            "province": "age_range",
+            "phone": "province"
         }
         if step in previous_steps:
             state["step"] = previous_steps[step]
             user_states[chat_id] = state
             prompts = {
-                "role": "🎭 نقش خود را انتخاب کنید:",
-                "subrole": f"🎯 یکی از ریزنقش‌های «{state.get('role')}» را انتخاب کنید:",
+                "role": "🎭 لطفاً نقش خود را انتخاب کنید:",
+                "subrole": f"🎯 لطفاً حوزه فعالیت خود را انتخاب کنید:",
                 "gender": "👤 جنسیت خود را انتخاب کنید:",
                 "age_range": "🎂 محدوده سنی خود را انتخاب کنید:",
                 "province": "🏙️ استان خود را انتخاب کنید:",
                 "phone": "📱 شماره تماس خود را از طریق دکمه زیر ارسال کنید:",
+                "social_link": "🌐 لطفاً آدرس صفحه یا کانال خود را ارسال کنید (یا گزینه 'ندارم' را انتخاب کنید):",
                 "sample_type": "📎 نوع نمونه‌کار خود را انتخاب کنید:"
             }
             keyboards = {
@@ -193,6 +247,7 @@ async def handle_message(client, message):
                 "age_range": make_keyboard(age_ranges, per_row=2),
                 "province": make_keyboard(provinces, per_row=4),
                 "phone": phone_keyboard,
+                "social_link": social_link_keyboard,
                 "sample_type": make_keyboard(list(sample_types.keys()), per_row=2)
             }
             await message.reply(prompts[state["step"]], reply_markup=keyboards[state["step"]])
@@ -201,9 +256,13 @@ async def handle_message(client, message):
     # 🎭 نقش
     if step == "role" and text in roles:
         state["role"] = text
-        state["step"] = "subrole"
-        await message.reply(f"🎯 یکی از ریزنقش‌های «{text}» را انتخاب کنید:",
-                            reply_markup=make_keyboard(subroles[text]))
+        if text in ["خبرنگار", "نویسنده"]:
+            state["step"] = "subrole"
+            await message.reply(f"🎯 لطفاً حوزه فعالیت خود را انتخاب کنید:",
+                                reply_markup=make_keyboard(subroles[text]))
+        else:
+            state["step"] = "gender"
+            await message.reply("👤 جنسیت خود را انتخاب کنید:", reply_markup=make_keyboard(gender_options, per_row=1))
         user_states[chat_id] = state
         return
 
@@ -244,20 +303,48 @@ async def handle_message(client, message):
         if hasattr(message, "contact") and message.contact:
             state["phone_number"] = message.contact.phone_number
             state["message_date"] = datetime.fromtimestamp(message.date.timestamp()).isoformat()
+            state["step"] = "social_link"
+            await message.reply(
+                "🌐 لطفاً آدرس صفحه یا کانال خود را ارسال کنید:\n"
+                "(مثال: @channel_name یا https://t.me/channel_name)\n"
+                "اگر صفحه/کانالی ندارید، گزینه 'ندارم' را انتخاب کنید.",
+                reply_markup=social_link_keyboard
+            )
+            user_states[chat_id] = state
+        else:
+            await message.reply("⚠️ لطفاً از دکمه ارسال شماره استفاده کنید:", reply_markup=phone_keyboard)
+        return
+
+    # 🌐 دریافت آدرس صفحه/کانال
+    if step == "social_link":
+        if text == "ندارم":
+            state["social_link"] = "ندارم"
+            state["step"] = "sample_type"
+            await message.reply("📎 نوع نمونه‌کار خود را انتخاب کنید:",
+                                reply_markup=make_keyboard(list(sample_types.keys()), per_row=2))
+            user_states[chat_id] = state
+        elif text and (text.startswith("http") or text.startswith("@")):
+            state["social_link"] = text
             state["step"] = "sample_type"
             await message.reply("📎 نوع نمونه‌کار خود را انتخاب کنید:",
                                 reply_markup=make_keyboard(list(sample_types.keys()), per_row=2))
             user_states[chat_id] = state
         else:
-            await message.reply("⚠️ لطفاً از دکمه ارسال شماره استفاده کنید:", reply_markup=phone_keyboard)
+            await message.reply(
+                "⚠️ لطفاً آدرس معتبر وارد کنید یا گزینه 'ندارم' را انتخاب کنید:\n"
+                "(مثال: @channel_name یا https://t.me/channel_name)",
+                reply_markup=social_link_keyboard
+            )
         return
 
     # 📎 نوع فایل
     if step == "sample_type" and text in sample_types:
         state["sample_type"] = text
         state["step"] = "file"
-        await message.reply(f"{text}\n{sample_types[text]}\n\n📤 لطفاً فایل مربوطه را ارسال فرمایید:",
-                            reply_markup=final_keyboard)
+        await message.reply(
+            f"{text}\n{sample_types[text]}\n\n📤 لطفاً فایل مربوطه را ارسال فرمایید:",
+            reply_markup=final_keyboard
+        )
         user_states[chat_id] = state
         return
 
@@ -287,14 +374,14 @@ async def handle_message(client, message):
             cursor.execute("""
                 INSERT INTO submissions (
                     user_id, username, role, subrole, gender, age_range, province,
-                    sample_type, file_path, file_size, phone_number, message_date
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    sample_type, file_path, file_size, phone_number, social_link, message_date
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (
                 user.id, username, state.get("role"), state.get("subrole"),
                 state.get("gender"), state.get("age_range"), state.get("province"),
                 state.get("sample_type"), path, file_size(path),
-                state.get("phone_number"), state.get("message_date")
+                state.get("phone_number"), state.get("social_link"), state.get("message_date")
             ))
 
             conn.commit()
