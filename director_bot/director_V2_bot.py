@@ -341,6 +341,13 @@ async def handle_message(client, message):
                                 reply_markup=make_keyboard(list(sample_types.keys()), per_row=2))
             user_states[chat_id] = state
         elif text and (text.startswith("http") or text.startswith("@")):
+            if len(text) > 250:
+                await message.reply(
+                    "⚠️ طول لینک ارسالی زیاد است.\n"
+                    "لطفاً لینک کوتاه‌تر یا معتبر ارسال کنید:",
+                    reply_markup=social_link_keyboard
+                )
+                return
             state["social_link"] = text
             state["step"] = "sample_type"
             await message.reply("📎 نوع نمونه‌کار خود را انتخاب کنید:",
