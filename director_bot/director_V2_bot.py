@@ -68,8 +68,8 @@ user_states = {}
 # 🟢 پیام آغاز
 def set_start_message():
     text = (
-        "🗂️ به «سامانه پویش» خوش آمدید!\n\n"
-        "در این سامانه می‌توانید نمونه‌کارهای خود را در قالب‌های ویدیویی، تصویری، صوتی و متنی ارسال فرمایید.\n"
+        "🗂️ به بازوی پویش تولید محتوا خوش آمدید!\n\n"
+        "در این بازو می‌توانید نمونه‌کارهای خود را در قالب‌های ویدیویی، تصویری، صوتی و متنی ارسال فرمایید.\n"
         "برای آغاز، لطفاً دکمه «شروع» را فشار دهید 👇"
     )
     try:
@@ -213,52 +213,69 @@ async def handle_message(client, message):
 
     if text in ["/start", "شروع", "🔄 شروع مجدد"]:
         user_states[chat_id] = {"step": "role"}
-        await message.reply("🎭 لطفاً نقش خود را انتخاب کنید:",
+        await message.reply("🎭 لطفاً حوزه فعالیت خود را انتخاب کنید:",
                             reply_markup=make_keyboard(roles, per_row=2, include_back=False))
         return
 
     if text == "↩️ بازگشت":
-        previous_steps = {
-            "social_link": "phone",
-            "sample_type": "social_link",
-            "subrole": "role",
-            "gender": "subrole",
-            "age_range": "gender",
-            "province": "age_range",
-            "phone": "province"
-        }
-        if step in previous_steps:
-            state["step"] = previous_steps[step]
-            user_states[chat_id] = state
-            prompts = {
-                "role": "🎭 لطفاً نقش خود را انتخاب کنید:",
-                "subrole": f"🎯 لطفاً حوزه فعالیت خود را انتخاب کنید:",
-                "gender": "👤 جنسیت خود را انتخاب کنید:",
-                "age_range": "🎂 محدوده سنی خود را انتخاب کنید:",
-                "province": "🏙️ استان خود را انتخاب کنید:",
-                "phone": "📱 شماره تماس خود را از طریق دکمه زیر ارسال کنید:",
-                "social_link": "🌐 لطفاً آدرس صفحه یا کانال خود را ارسال کنید (یا گزینه 'ندارم' را انتخاب کنید):",
-                "sample_type": "📎 نوع نمونه‌کار خود را انتخاب کنید:"
-            }
-            keyboards = {
-                "role": make_keyboard(roles, per_row=2, include_back=False),
-                "subrole": make_keyboard(subroles[state.get("role")]),
-                "gender": make_keyboard(gender_options, per_row=1),
-                "age_range": make_keyboard(age_ranges, per_row=2),
-                "province": make_keyboard(provinces, per_row=4),
-                "phone": phone_keyboard,
-                "social_link": social_link_keyboard,
-                "sample_type": make_keyboard(list(sample_types.keys()), per_row=2)
-            }
-            await message.reply(prompts[state["step"]], reply_markup=keyboards[state["step"]])
+        role = state.get("role")
+        # بررسی آیا نقش فعلی زیرنقش دارد و کاربر در مرحله بعد از زیرنقش است
+        has_subroles = role in subroles and len(subroles[role]) > 0
+        after_subrole = step in ["gender", "age_range", "province", "phone", "social_link", "sample_type", "file"]
+
+        if step == "subrole" or (has_subroles and after_subrole):
+            state["step"] = "subrole" if step != "subrole" else "role"
+        elif step == "gender":
+            state["step"] = "role" if not has_subroles else "subrole"
+        elif step in ["age_range", "province", "phone", "social_link", "sample_type", "file"]:
+            state["step"] = {
+                "age_range": "gender",
+                "province": "age_range",
+                "phone": "province",
+                "social_link": "phone",
+                "sample_type": "social_link",
+                "file": "sample_type"
+            }[step]
+
+        user_states[chat_id] = state
+
+        # ارسال پیام و کیبورد مناسب برای مرحله جدید
+        if state["step"] == "role":
+            await message.reply("🎭 لطفاً حوزه فعالیت خود را انتخاب کنید:",
+                                reply_markup=make_keyboard(roles, per_row=2, include_back=False))
+        elif state["step"] == "subrole":
+            await message.reply(f"🎯 لطفاً تخصص خود را انتخاب کنید:",
+                                reply_markup=make_keyboard(subroles[role]))
+        elif state["step"] == "gender":
+            await message.reply("👤 جنسیت خود را انتخاب کنید:",
+                                reply_markup=make_keyboard(gender_options, per_row=1))
+        elif state["step"] == "age_range":
+            await message.reply("🎂 محدوده سنی خود را انتخاب کنید:",
+                                reply_markup=make_keyboard(age_ranges, per_row=2))
+        elif state["step"] == "province":
+            await message.reply("🏙️ استان خود را انتخاب کنید:",
+                                reply_markup=make_keyboard(provinces, per_row=4))
+        elif state["step"] == "phone":
+            await message.reply("📱 شماره تماس خود را از طریق دکمه زیر ارسال کنید:",
+                                reply_markup=phone_keyboard)
+        elif state["step"] == "social_link":
+            await message.reply(
+                "🌐 لطفاً آدرس صفحه یا کانال خود را ارسال کنید:\n"
+                "مثال: https://ble.ir/Ad_iraneman\n"
+                "اگر صفحه/کانالی ندارید، گزینه 'ندارم' را انتخاب کنید.",
+                reply_markup=social_link_keyboard
+            )
+        elif state["step"] == "sample_type":
+            await message.reply("📎 نوع نمونه‌کار خود را انتخاب کنید:",
+                                reply_markup=make_keyboard(list(sample_types.keys()), per_row=2))
         return
 
     # 🎭 نقش
     if step == "role" and text in roles:
         state["role"] = text
-        if text in ["خبرنگار", "نویسنده"]:
+        if text in subroles and len(subroles[text]) > 0:
             state["step"] = "subrole"
-            await message.reply(f"🎯 لطفاً حوزه فعالیت خود را انتخاب کنید:",
+            await message.reply(f"🎯 لطفاً تخصص خود را انتخاب کنید:",
                                 reply_markup=make_keyboard(subroles[text]))
         else:
             state["step"] = "gender"
@@ -306,7 +323,7 @@ async def handle_message(client, message):
             state["step"] = "social_link"
             await message.reply(
                 "🌐 لطفاً آدرس صفحه یا کانال خود را ارسال کنید:\n"
-                "(مثال: @channel_name یا https://t.me/channel_name)\n"
+                "مثال: https://ble.ir/Ad_iraneman\n"
                 "اگر صفحه/کانالی ندارید، گزینه 'ندارم' را انتخاب کنید.",
                 reply_markup=social_link_keyboard
             )
@@ -332,7 +349,7 @@ async def handle_message(client, message):
         else:
             await message.reply(
                 "⚠️ لطفاً آدرس معتبر وارد کنید یا گزینه 'ندارم' را انتخاب کنید:\n"
-                "(مثال: @channel_name یا https://t.me/channel_name)",
+                "(مثال: https://ble.ir/Ad_iraneman)",
                 reply_markup=social_link_keyboard
             )
         return
@@ -401,7 +418,7 @@ async def handle_message(client, message):
         await message.reply(
             "🙏 از اعتماد و همکاری شما سپاسگزاریم.\n"
             "📌 اطلاعات با موفقیت ثبت شد.\n"
-            "برای ارسال مجدد، دکمه «شروع مجدد» را انتخاب فرمایید.",
+            "برای ارسال مجدد نمونه کار یا انتخاب حوزه فعالیت دیگری، دکمه «شروع مجدد» را انتخاب فرمایید.",
             reply_markup=final_keyboard
         )
         return
