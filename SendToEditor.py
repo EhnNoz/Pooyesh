@@ -8,6 +8,7 @@ import time
 from datetime import datetime
 from dotenv import load_dotenv
 import random
+
 # بارگذاری متغیرهای محیطی
 load_dotenv()
 
@@ -36,7 +37,6 @@ class ContentSender:
         mime_type, _ = mimetypes.guess_type(file_path)
         if not mime_type:
             return 'document'
-
         if mime_type.startswith('image/'):
             return 'photo'
         elif mime_type.startswith('video/'):
@@ -48,8 +48,11 @@ class ContentSender:
 
     def send_content(self, chat_id, content_path, caption=None):
         """ارسال محتوا بر اساس نوع آن"""
-        content_type = self.detect_content_type(content_path)
+        # اگر content_path خالی باشد، فقط یک پیام متنی ارسال کنید
+        if not content_path:
+            return self.send_message(chat_id, caption or "اطلاعات ارسالی (بدون فایل)")
 
+        content_type = self.detect_content_type(content_path)
         try:
             content_path = f'F:\sourcecode\Instaloader\{content_path}'
             with open(content_path, 'rb') as file:
@@ -58,17 +61,14 @@ class ContentSender:
                 params = {'chat_id': chat_id}
                 if caption:
                     params['caption'] = caption
-
                 endpoint = {
                     'photo': 'sendPhoto',
                     'video': 'sendVideo',
                     'audio': 'sendAudio',
                     'document': 'sendDocument'
                 }.get(content_type, 'sendDocument')
-
                 url = f"{BALE_BASE_URL}{endpoint}"
                 response = self.session.post(url, data=params, files=files)
-
                 if response.status_code == 200:
                     return True
                 else:
@@ -78,6 +78,21 @@ class ContentSender:
             print(f"خطا در ارسال محتوا: {str(e)}")
             return False
 
+    def send_message(self, chat_id, text):
+        """ارسال یک پیام متنی"""
+        try:
+            params = {'chat_id': chat_id, 'text': text}
+            url = f"{BALE_BASE_URL}sendMessage"
+            response = self.session.post(url, data=params)
+            if response.status_code == 200:
+                return True
+            else:
+                print(f"خطا در ارسال پیام متنی: {response.text}")
+                return False
+        except Exception as e:
+            print(f"خطا در ارسال پیام متنی: {str(e)}")
+            return False
+
 
 def update_editors_from_excel():
     """به‌روزرسانی جدول سردبیران از فایل اکسل بدون پاک کردن داده‌های قبلی"""
@@ -85,10 +100,8 @@ def update_editors_from_excel():
     try:
         df = pd.read_excel(EDITORS_EXCEL_PATH)
         print("ستون‌های فایل اکسل:", df.columns.tolist())
-
         conn = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
-
         # ایجاد جدول اگر وجود نداشته باشد
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS editors (
@@ -102,22 +115,18 @@ def update_editors_from_excel():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
-
         # برای هر سطر در اکسل
         for _, row in df.iterrows():
             try:
                 # تبدیل مقادیر خالی به مقادیر پیش‌فرض
                 editor_id = int(row['آیدی']) if pd.notna(row['آیدی']) else None
                 subrole = str(row['تخصص']) if pd.notna(row['تخصص']) else ""
-
                 # بررسی وجود سردبیر با این مشخصات
                 cursor.execute("""
                     SELECT id, count FROM editors 
                     WHERE editor_id = %s AND role = %s AND subrole = %s
                 """, (editor_id, str(row['نقش']), subrole))
-
                 existing_editor = cursor.fetchone()
-
                 if existing_editor:
                     # اگر سردبیر وجود دارد، فقط اطلاعات پایه را آپدیت کن (count تغییر نمی‌کند)
                     cursor.execute("""
@@ -143,14 +152,11 @@ def update_editors_from_excel():
                         subrole
                     ))
                     print(f"سردبیر جدید {row['اسم']} {row['فامیل']} اضافه شد")
-
             except Exception as e:
                 print(f"خطا در پردازش سردبیر {row['اسم']}: {str(e)}")
                 continue
-
         conn.commit()
         print(f"به‌روزرسانی سردبیران با موفقیت انجام شد. تعداد: {len(df)}")
-
     except Exception as e:
         print(f"خطا در به‌روزرسانی سردبیران: {str(e)}")
         if conn:
@@ -166,29 +172,23 @@ def find_available_editor(role, subrole=None):
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
-
         query = """
             SELECT id, editor_id, first_name, last_name, count
             FROM editors 
             WHERE role = %s AND editor_id IS NOT NULL
         """
         params = [role]
-
         if subrole:
             query += " AND subrole = %s"
             params.append(subrole)
-
         cursor.execute(query, params)
         editors = cursor.fetchall()
-
         if not editors:
             return None
-
         # انتخاب تصادفی با وزن معکوس تعداد اختصاصات (count)
         weights = [1 / (e[4] + 1) for e in editors]  # +1 برای جلوگیری از تقسیم بر صفر
         selected = random.choices(editors, weights=weights, k=1)[0]
         return selected[:4]  # حذف فیلد count از خروجی
-
     except Exception as e:
         print(f"خطا در یافتن سردبیر: {str(e)}")
         return None
@@ -203,7 +203,6 @@ def update_document_editor(document_id, editor_db_id, editor_id):
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
-
         # به‌روزرسانی سند با editor_id (نه id دیتابیس)
         cursor.execute("""
             UPDATE submissions 
@@ -211,12 +210,10 @@ def update_document_editor(document_id, editor_db_id, editor_id):
             WHERE id = %s
             RETURNING id
         """, (editor_id, document_id))
-
         if not cursor.fetchone():
             print(f"خطا: سند با شناسه {document_id} یافت نشد")
             conn.rollback()
             return False
-
         # افزایش تعداد اختصاص سردبیر
         cursor.execute("""
             UPDATE editors 
@@ -224,16 +221,13 @@ def update_document_editor(document_id, editor_db_id, editor_id):
             WHERE id = %s
             RETURNING id
         """, (editor_db_id,))
-
         if not cursor.fetchone():
             print(f"خطا در افزایش تعداد اختصاص سردبیر {editor_db_id}")
             conn.rollback()
             return False
-
         conn.commit()
         print(f"سند {document_id} به سردبیر با شناسه {editor_id} اختصاص داده شد.")
         return True
-
     except psycopg2.Error as e:
         print(f"خطای دیتابیس در به‌روزرسانی: {str(e)}")
         if conn:
@@ -250,38 +244,38 @@ def process_unassigned_contents():
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
-
+        # تغییر: حذف شرط file_path IS NOT NULL برای ارسال رکوردهای بدون فایل نیز
         cursor.execute("""
-            SELECT id, role, subrole, file_path, username, phone_number
+            SELECT id, role, subrole, file_path, username, phone_number, social_link
             FROM submissions 
-            WHERE editor_id IS NULL AND file_path IS NOT NULL
+            WHERE editor_id IS NULL
         """)
         unassigned_contents = cursor.fetchall()
-
         if not unassigned_contents:
             print("هیچ محتوای بدون سردبیری یافت نشد.")
             return
-
         print(f"تعداد محتواهای بدون سردبیر: {len(unassigned_contents)}")
-
         sender = ContentSender()
-
-        for content_id, role, subrole, file_path, username, phone_number in unassigned_contents:
+        # تغییر: اضافه شدن social_link به حلقه
+        for content_id, role, subrole, file_path, username, phone_number, social_link in unassigned_contents:
             # تبدیل subrole خالی به None
             subrole = subrole if subrole else None
-
             editor = find_available_editor(role, subrole)
-
             if editor:
                 editor_db_id, editor_id, first_name, last_name = editor
                 print(
                     f"ارسال محتوای {content_id} به سردبیر: {first_name} {last_name} (ID: {editor_id}, نقش: {role}, تخصص: {subrole or 'بدون تخصص'})")
 
-                try:
-                    sender_message = username+'\n'+str(phone_number)+'\n'+role+'-'+subrole
-                except:
-                    sender_message = username + '\n' + str(phone_number) + '\n' + role
+                # تغییر: ساخت پیام با اطلاعات جدید شامل social_link
+                sender_message_parts = [username, str(phone_number), role]
+                if subrole:  # اضافه کردن subrole فقط اگر خالی نباشد
+                    sender_message_parts.append(subrole)
+                if social_link:  # اضافه کردن social_link فقط اگر خالی نباشد
+                    sender_message_parts.append(social_link)
 
+                sender_message = '\n'.join(sender_message_parts)
+
+                # تغییر: ارسال محتوا - اگر file_path خالی باشد، send_content فقط پیام ارسال می‌کند
                 if sender.send_content(editor_id, file_path, sender_message):
                     if update_document_editor(content_id, editor_db_id, editor_id):
                         print(f"محتوا {content_id} با موفقیت اختصاص داده شد.")
@@ -291,7 +285,6 @@ def process_unassigned_contents():
                     print(f"خطا در ارسال محتوای {content_id} به سردبیر")
             else:
                 print(f"سردبیر مناسبی برای محتوای {content_id} با نقش {role} و تخصص {subrole or 'بدون تخصص'} یافت نشد.")
-
     except Exception as e:
         print(f"خطا در پردازش محتواها: {str(e)}")
     finally:
@@ -324,7 +317,6 @@ def main():
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
-
         # ایجاد جدول editors بدون محدودیت یکتایی
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS editors (
@@ -338,7 +330,6 @@ def main():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
-
         # ایجاد جدول submissions بدون ستون updated_at
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS submissions (
@@ -368,15 +359,12 @@ def main():
     finally:
         if conn:
             conn.close()
-
     # اجرای اولیه
     print("برنامه در حال راه اندازی...")
     update_editors_from_excel()
     nightly_job()  # اجرای اولیه
-
     # تنظیم زمان‌بندی برای اجرای ساعتی
     schedule.every().minutes.do(hourly_job)
-
     # اجرای حلقه اصلی برنامه
     print("برنامه آماده است و هر ساعت محتواهای جدید را بررسی می‌کند...")
     while True:

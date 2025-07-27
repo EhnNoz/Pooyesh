@@ -3,61 +3,71 @@ import requests
 from datetime import datetime
 from typing import List, Dict, Any
 import psycopg2
-from sqlalchemy import create_engine
-from psycopg2 import sql
 from sqlalchemy import create_engine, text
 
-BOT_TOKEN = "286348672:N9rQ7rGrYj5htzkRax9H7t4HJQpNa1UBcIxgetna"
-BASE_URL = f"https://tapi.bale.ai/bot{BOT_TOKEN}"
+# اطلاعات ربات‌ها
+BOTS = {
+    "robot1": {
+        "token": "",
+        "base_url": "https://tapi.bale.ai/bot"
+    }
+    # می‌توانید ربات‌های بیشتری اضافه کنید
+    # "robot2": {
+    #     "token": "توکن_ربات_دوم",
+    #     "base_url": "https://tapi.bale.ai/botتوکن_ربات_دوم"
+    # }
+}
 
 # تنظیمات اتصال به PostgreSQL با SQLAlchemy
-DATABASE_URI = "postgresql://postgres:R12345eza@10.32.141.8/Ehsan"
+DATABASE_URI = "postgresql://....:......@10.../......"
 
 # ایجاد موتور اتصال
 engine = create_engine(DATABASE_URI, pool_size=20, max_overflow=100)
 
 
-def get_all_updates(offset: int = 0, limit: int = 100) -> List[Dict[str, Any]]:
-    """دریافت تمام آپدیت‌ها با مدیریت offset چندگانه"""
+def get_all_updates(bot_name: str, offset: int = 0, limit: int = 100) -> List[Dict[str, Any]]:
+    """دریافت تمام آپدیت‌ها با مدیریت offset چندگانه برای یک ربات خاص"""
     all_results = []
+    bot_info = BOTS[bot_name]
+    base_url = bot_info['base_url']
 
     while True:
         params = {'offset': offset, 'timeout': 10}
         try:
-            response = requests.get(f"{BASE_URL}/getUpdates", params=params)
+            response = requests.get(f"{base_url}/getUpdates", params=params)
             response.raise_for_status()
             results = response.json().get('result', [])
 
             if not results:
-                print("هیچ آپدیتی موجود نیست.")
+                print(f"هیچ آپدیتی برای ربات {bot_name} موجود نیست.")
                 break
 
             all_results.extend(results)
-            offset = results[-1]['update_id'] + 1  # به‌روزرسانی offset برای درخواست بعدی
+            offset = results[-1]['update_id'] + 1
 
-            print(f"دریافت {len(results)} آپدیت دیگر. جمع کل: {len(all_results)}")
+            print(f"دریافت {len(results)} آپدیت دیگر از ربات {bot_name}. جمع کل: {len(all_results)}")
 
         except requests.exceptions.RequestException as e:
-            print(f"خطا در دریافت پیام‌ها: {e}")
+            print(f"خطا در دریافت پیام‌ها از ربات {bot_name}: {e}")
             break
 
     return all_results
 
 
-def get_new_updates() -> List[Dict[str, Any]]:
-    """دریافت آپدیت‌های جدید با مدیریت offset"""
-    last_update_id = get_last_update_id_from_db()
-    print(f"آخرین update_id در دیتابیس: {last_update_id}")
+def get_new_updates(bot_name: str) -> List[Dict[str, Any]]:
+    """دریافت آپدیت‌های جدید با مدیریت offset برای یک ربات خاص"""
+    last_update_id = get_last_update_id_from_db(bot_name)
+    print(f"آخرین update_id در دیتابیس برای ربات {bot_name}: {last_update_id}")
 
     # دریافت آپدیت‌ها از نقطه‌ی بعد از آخرین update_id
-    updates = get_all_updates(offset=last_update_id + 1)
+    updates = get_all_updates(bot_name, offset=last_update_id + 1)
 
     if updates:
         new_offset = updates[-1].get('update_id') + 1
-        print(f"{len(updates)} آپدیت جدید دریافت شد. جدیدترین offset: {new_offset}")
+        print(f"{len(updates)} آپدیت جدید از ربات {bot_name} دریافت شد. جدیدترین offset: {new_offset}")
         return updates
     else:
-        print("آپدیت جدیدی وجود ندارد.")
+        print(f"آپدیت جدیدی از ربات {bot_name} وجود ندارد.")
         return []
 
 
@@ -114,13 +124,14 @@ def extract_forward_info(message: Dict[str, Any]) -> Dict[str, Any]:
     return forward_info
 
 
-def extract_message_data(update: Dict[str, Any]) -> Dict[str, Any]:
-    """استخراج ساختار کامل داده‌های پیام"""
+def extract_message_data(update: Dict[str, Any], bot_name: str) -> Dict[str, Any]:
+    """استخراج ساختار کامل داده‌های پیام + اضافه کردن نام ربات"""
     message = update.get('message', {})
     from_user = message.get('from', {})
     chat = message.get('chat', {})
 
     message_data = {
+        'bot_name': bot_name,  # اضافه کردن نام ربات
         'update_id': update['update_id'],
         'message_id': message.get('message_id'),
         'date': datetime.fromtimestamp(message['date']).strftime('%Y-%m-%d %H:%M:%S') if message.get('date') else None,
@@ -146,15 +157,16 @@ def extract_message_data(update: Dict[str, Any]) -> Dict[str, Any]:
     return message_data
 
 
-def create_messages_dataframe(updates: List[Dict[str, Any]]) -> pd.DataFrame:
-    """تبدیل لیست آپدیت‌ها به دیتافریم"""
+def create_messages_dataframe(updates: List[Dict[str, Any]], bot_name: str) -> pd.DataFrame:
+    """تبدیل لیست آپدیت‌ها به دیتافریم + اضافه کردن نام ربات"""
     if not updates:
         return pd.DataFrame()
 
-    messages_data = [extract_message_data(update) for update in updates]
+    messages_data = [extract_message_data(update, bot_name) for update in updates]
     df = pd.DataFrame(messages_data)
 
     columns_order = [
+        'bot_name',  # اضافه شده
         'update_id', 'message_id', 'date', 'chat_id', 'chat_type', 'chat_title', 'chat_username',
         'sender_id', 'sender_is_bot', 'sender_name', 'sender_username', 'text', 'caption',
         'has_media', 'photo_file_id', 'photo_file_unique_id', 'photo_width', 'photo_height',
@@ -180,14 +192,17 @@ def save_to_excel(df: pd.DataFrame, filename: str = "telegram_messages.xlsx"):
         print("دیتایی برای ذخیره وجود ندارد.")
 
 
-def get_last_update_id_from_db() -> int:
-    """دریافت آخرین update_id از دیتابیس"""
+def get_last_update_id_from_db(bot_name: str) -> int:
+    """دریافت آخرین update_id از دیتابیس برای یک ربات خاص"""
     try:
         with engine.connect() as conn:
-            result = conn.execute(text("SELECT MAX(update_id) FROM telegram_messages")).fetchone()[0]
+            result = conn.execute(
+                text("SELECT MAX(update_id) FROM telegram_messages WHERE bot_name = :bot_name"),
+                {"bot_name": bot_name}
+            ).fetchone()[0]
             return int(result) if result is not None else 0
     except Exception as e:
-        print(f"خطا در خواندن از دیتابیس: {e}")
+        print(f"خطا در خواندن از دیتابیس برای ربات {bot_name}: {e}")
         return 0
 
 
@@ -202,23 +217,26 @@ def save_to_database(df: pd.DataFrame):
 
 
 def main():
-    print("در حال دریافت آپدیت‌های جدید از Bale...")
+    print("در حال دریافت آپدیت‌های جدید از ربات‌های Bale...")
 
-    all_updates = get_new_updates()
+    for bot_name in BOTS.keys():
+        print(f"\n--- در حال پردازش ربات: {bot_name} ---")
 
-    if all_updates:
-        messages_df = create_messages_dataframe(all_updates)
+        all_updates = get_new_updates(bot_name)
 
-        if not messages_df.empty:
-            print("\n✅ نمونه‌ای از داده‌های استخراج شده:")
-            print(messages_df.head())
+        if all_updates:
+            messages_df = create_messages_dataframe(all_updates, bot_name)
 
-            save_to_excel(messages_df)
-            save_to_database(messages_df)
+            if not messages_df.empty:
+                print(f"\n✅ نمونه‌ای از داده‌های استخراج شده از ربات {bot_name}:")
+                print(messages_df.head())
+
+                save_to_excel(messages_df, f"{bot_name}_messages.xlsx")
+                save_to_database(messages_df)
+            else:
+                print(f"⚠️ هیچ پیام معتبری از ربات {bot_name} استخراج نشد.")
         else:
-            print("⚠️ هیچ پیام معتبری استخراج نشد.")
-    else:
-        print("❌ هیچ آپدیت جدیدی دریافت نشد.")
+            print(f"❌ هیچ آپدیت جدیدی از ربات {bot_name} دریافت نشد.")
 
 
 if __name__ == "__main__":
@@ -227,17 +245,18 @@ if __name__ == "__main__":
 # def run_polling():
 #     print("Polling شروع شد...")
 #     while True:
-#         last_offset = get_last_offset_from_db()
-#         updates = get_updates(offset=last_offset + 1)
+#         for bot_name in BOTS.keys():
+#             last_offset = get_last_update_id_from_db(bot_name)
+#             updates = get_all_updates(bot_name, offset=last_offset + 1)
 #
-#         if updates:
-#             process_updates(updates)
-#             new_offset = updates[-1]['update_id'] + 1
-#             save_offset_to_db(new_offset)
-#             print(f"آخرین update_id: {new_offset}")
+#             if updates:
+#                 messages_df = create_messages_dataframe(updates, bot_name)
+#                 save_to_database(messages_df)
+#                 new_offset = updates[-1]['update_id'] + 1
+#                 print(f"آخرین update_id برای ربات {bot_name}: {new_offset}")
 #
 #         # منتظر بمانید قبل از درخواست بعدی (برای جلوگیری از overload)
-#         time.sleep(1)
+#         time.sleep(10)
 #
 # if __name__ == "__main__":
 #     run_polling()
