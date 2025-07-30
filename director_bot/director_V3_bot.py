@@ -10,14 +10,18 @@ UPLOAD_ROOT = "uploads"
 for folder in ["video", "image", "text", "audio", "other"]:
     os.makedirs(os.path.join(UPLOAD_ROOT, folder), exist_ok=True)
 # 🗄️ اتصال به PostgreSQL
+
+
 def get_db_connection():
     return psycopg2.connect(
-        host="", # مثلاً "localhost" یا IP
-        database="",
-        user="",
-        password="",
+        host="10.32.141.8", # مثلاً "localhost" یا IP
+        database="Ehsan",
+        user="postgres",
+        password="R12345eza",
         port="5432" # پورت پیش‌فرض PostgreSQL
     )
+
+
 def create_table():
     conn = None
     try:
@@ -54,10 +58,11 @@ def create_table():
     finally:
         if conn:
             conn.close()
+
 # اجرای اولیه ساخت جدول
 create_table()
 # 🤖 راه‌اندازی ربات بله
-TOKEN = "" # توکن ربات بله خود را اینجا وارد کنید
+TOKEN = "1050407176:G9YQji19Cc6JMiYhUJoIgJ8Ms5dQOFPmRxYSwo5u" # توکن ربات بله خود را اینجا وارد کنید
 bot = Client(TOKEN)
 user_states = {}
 # 🔧 ساخت کیبورد سفارشی
@@ -310,6 +315,13 @@ sample_types = {
     "فایل تصویری 🖼️": "JPG, PNG",
     "فایل متنی 📄": "PDF, DOCX"
 }
+
+# custom_file_keyboard = {
+#     "keyboard": [["↩️ بازگشت"], ["🔄 شروع مجدد"]],
+#     "resize_keyboard": True,
+#     "one_time_keyboard": True
+# }
+
 def file_size(path):
     try:
         size_kb = round(os.path.getsize(path) / 1024)
@@ -356,6 +368,13 @@ async def show_confirmation(message, state):
 async def save_file(message, file_type="sample"):
     try:
         filename = message.document.name or f"{file_type}_{message.document.id}"
+        ext = os.path.splitext(filename)[1].lower()
+
+        # لیست سیاه: فایل‌های اجرایی
+        blacklisted_exts = [".exe", ".bat", ".sh", ".py", ".js", ".vbs", ".py"]
+        if ext in blacklisted_exts:
+            return None, "فایل اجرایی ممنوع است"
+
         folder = {
             "video": "video", "image": "image", "text": "text",
             "application": "text", "audio": "audio"
@@ -570,11 +589,17 @@ async def handle_message(client, message):
                                     reply_markup=make_keyboard(list(sample_types.keys()), per_row=2))
             else:
                 await show_confirmation(message, state)
-        elif text and (text.startswith("http") or text.startswith("@")):
-            if len(text) > 250:
+        elif text.startswith("https://"):
+            if len(text) > 150:
                 await message.reply(
-                    "⚠️ طول لینک ارسالی زیاد است.\n"
-                    "لطفاً لینک کوتاه‌تر یا معتبر ارسال کنید:",
+                    "لطفاً یک لینک کوتاه‌تر و معتبر ارسال کنید:",
+                    reply_markup=link_keyboard
+                )
+                return
+            # اختیاری: بررسی ساده برای وجود حداقل یک کاراکتر بعد از https://
+            if len(text) <= 8:  # فقط https:// باشد
+                await message.reply(
+                    "⚠️ لطفاً یک لینک کامل و معتبر وارد کنید.",
                     reply_markup=link_keyboard
                 )
                 return
@@ -587,8 +612,9 @@ async def handle_message(client, message):
                 await show_confirmation(message, state)
         else:
             await message.reply(
-                "⚠️ لطفاً آدرس معتبر وارد کنید یا گزینه 'ندارم' را انتخاب کنید:\n"
-                "(مثال: https://ble.ir/Ad_iraneman)",
+                "⚠️ لطفاً یک لینک معتبر ارسال کنید یا گزینه «ندارم» را انتخاب کنید."
+    
+                "مثال: https://ble.ir/Ad_iraneman",
                 reply_markup=link_keyboard
             )
         user_states[chat_id] = state
@@ -618,23 +644,66 @@ async def handle_message(client, message):
 
     # 📤 دریافت فایل (فقط برای تولیدکنندگان)
     if step == "file" and hasattr(message, "document") and state.get("main_role") == "تولیدکننده محتوا":
+        # لیست فرمت‌های مجاز بر اساس نوع نمونه کار
+        allowed_extensions = {
+            "فایل ویدیویی 🎬": ["mp4", "mov", "mkv", "avi"],
+            "فایل صوتی 🎵": ["mp3", "wav", "aac", "ogg"],
+            "فایل تصویری 🖼️": ["jpg", "jpeg", "png"],
+            "فایل متنی 📄": ["pdf", "docx"]
+        }
+
+        sample_type = state.get("sample_type")
+        if not sample_type or sample_type not in allowed_extensions:
+            await message.reply("⚠️ نوع نمونه‌کار نامشخص است. لطفاً مراحل را از اول طی کنید.")
+            return
+
+        # گرفتن نام فایل
+        filename = message.document.name or ""
+        if not filename:
+            custom_file_keyboard = {
+                "keyboard": [["↩️ بازگشت"], ["🔄 شروع مجدد"]],
+                "resize_keyboard": True,
+                "one_time_keyboard": True
+            }
+            await message.reply(
+                "⚠️ فایل ارسالی نام ندارد. لطفاً یک فایل با نام و پسوند صحیح ارسال کنید.",
+                reply_markup = custom_file_keyboard
+            )
+            return
+
+        # استخراج پسوند فایل
+        file_ext = filename.split(".")[-1].lower().strip()
+
+        # چک کردن پسوند
+        if file_ext not in allowed_extensions[sample_type]:
+            allowed_list = ", ".join([ext.upper() for ext in allowed_extensions[sample_type]])
+            custom_file_keyboard = {
+                "keyboard": [["↩️ بازگشت"], ["🔄 شروع مجدد"]],
+                "resize_keyboard": True,
+                "one_time_keyboard": True
+            }
+            await message.reply(
+                f"⚠️ فرمت فایل ارسالی مجاز نیست. "
+                f"لطفاً فقط فایل با فرمت‌های زیر ارسال کنید:\n"
+                f"{allowed_list}\n"
+                "دوباره فایل صحیح را ارسال کنید.",
+                reply_markup = custom_file_keyboard
+            )
+            return
+
+
         path, size = await save_file(message)
         if path:
             state["file_path"] = path
             state["file_size"] = size
             await show_confirmation(message, state)
         else:
-            # ساخت کیبورد سفارشی برای این مرحله در صورت خطا
             custom_error_keyboard = {
-                "keyboard": [
-                    ["⚠️ خطایی در دریافت فایل رخ داد. لطفاً مجدداً تلاش کنید."],
-                    ["↩️ بازگشت"],
-                    ["🔄 شروع مجدد"]
-                ],
+                "keyboard": [["⚠️ خطایی در دریافت فایل رخ داد. لطفاً مجدداً تلاش کنید."], ["↩️ بازگشت"], ["🔄 شروع مجدد"]],
                 "resize_keyboard": True,
                 "one_time_keyboard": True
             }
-            await message.reply("⚠️ خطایی در دریافت فایل رخ داد. لطفاً مجدداً تلاش کنید.", reply_markup=custom_error_keyboard) # استفاده از کیبورد سفارشی
+            await message.reply("⚠️ خطایی در دریافت فایل رخ داد. لطفاً مجدداً تلاش کنید.", reply_markup=custom_error_keyboard)
         return
 
     # ✅ تأیید نهایی اطلاعات
