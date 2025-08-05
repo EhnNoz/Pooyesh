@@ -26,7 +26,7 @@ import schedule
 
 # --- تنظیمات API ---
 LOGIN_URL = "http://185.204.197.17:8000/sapi/token/"
-CHANNEL_API_URL = "http://185.204.197.17:8000/sapi/rep/channel-code/?platform=1&channel=1"
+CHANNEL_API_URL = "http://185.204.197.17:8000/sapi/rep/channel-code/?platform=1"
 POSTS_API_URL = "http://185.204.197.17:8000/sapi/rep/posts/?platform=1&channel="
 POST_API_URL = "http://185.204.197.17:8000/sapi/rep/posts/"
 
@@ -567,9 +567,9 @@ if __name__ == "__main__":
     run_crawler()
 
     # # برنامه‌ریزی برای اجرای بعدی هر 6 ساعت
-    # schedule.every(12).hours.do(run_crawler)
+    schedule.every(12).hours.do(run_crawler)
     #
-    # print("⏰ برنامه به صورت خودکار هر 6 ساعت اجرا می‌شود...")
-    # while True:
-    #     schedule.run_pending()
-    #     time.sleep(60)  # هر دقیقه چک می‌کند
+    print("⏰ برنامه به صورت خودکار هر 6 ساعت اجرا می‌شود...")
+    while True:
+        schedule.run_pending()
+        time.sleep(60)  # هر دقیقه چک می‌کند
