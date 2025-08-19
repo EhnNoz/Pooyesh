@@ -11,6 +11,20 @@ from datetime import datetime, timedelta
 from persiantools.jdatetime import JalaliDate
 import os
 from dotenv import load_dotenv
+import schedule
+import logging
+import traceback
+
+# تنظیمات لاگ‌گیری
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("rubika_crawler.log", encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 load_dotenv(dotenv_path=".env")
 # --- تنظیمات API ---
@@ -21,16 +35,72 @@ POST_API_URL = f"{BASE_API_URL}/rep/posts/"
 POSTS_API_URL = f"{BASE_API_URL}/rep/posts/?platform=4&channel={{id}}"
 
 # --- اطلاعات ورود به API ---
-# print(os.getenv("API_USERNAME"))
-API_USERNAME = os.getenv("API_USERNAME")  # جایگزین خط قدیمی
-API_PASSWORD = os.getenv("API_PASSWORD")  # جایگزین خط قدیمی
+API_USERNAME = os.getenv("API_USERNAME")
+API_PASSWORD = os.getenv("API_PASSWORD")
 access_token = None
 
-print("🚀 شروع اسکریپت...")
+# --- متغیرهای سراسری ---
+driver = None
+is_logged_in = False
+first_channel = True
 
 
-# --- لاگین به API و دریافت توکن ---
+def setup_driver():
+    """تنظیم و راه‌اندازی مرورگر (فقط یک بار)"""
+    global driver
+    if driver is None:
+        options = webdriver.ChromeOptions()
+        options.add_argument("--start-maximized")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option('useAutomationExtension', False)
+        # options.add_argument("--headless")  # در صورت نیاز می‌توانید فعال کنید
+
+        try:
+            driver = webdriver.Chrome(options=options)
+            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            logger.info("✅ مرورگر Chrome با موفقیت راه‌اندازی شد.")
+            return True
+        except Exception as e:
+            logger.error(f"❌ خطا در راه‌اندازی مرورگر: {str(e)}")
+            return False
+    return True
+
+
+def manual_login():
+    """ورود دستی به روبیکا (فقط یک بار)"""
+    global is_logged_in
+
+    if is_logged_in:
+        return True
+
+    logger.info("⏳ لطفاً دستی وارد حساب کاربری روبیکا خود شوید (30 ثانیه فرصت دارید)...")
+
+    # باز کردن صفحه اصلی روبیکا
+    driver.get("https://web.rubika.ir/")
+    time.sleep(5)
+
+    # منتظر ماندن برای ورود کاربر
+    for i in range(30):
+        try:
+            # بررسی آیا کاربر لاگین کرده (با چک کردن وجود عناصر خاص بعد از لاگین)
+            WebDriverWait(driver, 2).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, ".sidebar, .chats-list"))
+            )
+            is_logged_in = True
+            logger.info("✅ ورود به روبیکا با موفقیت انجام شد.")
+            return True
+        except:
+            time.sleep(1)
+
+    logger.error("❌ زمان ورود به پایان رسید. لطفاً در اجرای بعدی وارد شوید.")
+    return False
+
+
 def login_to_api():
+    """لاگین به API و دریافت توکن"""
     global access_token
     try:
         response = requests.post(LOGIN_URL, data={
@@ -39,29 +109,29 @@ def login_to_api():
         })
         response.raise_for_status()
         access_token = response.json().get("access")
-        print("✅ با موفقیت به API لاگین شد.")
+        logger.info("✅ با موفقیت به API لاگین شد.")
         return True
     except Exception as e:
-        print(f"❌ خطا در لاگین به API: {str(e)}")
+        logger.error(f"❌ خطا در لاگین به API: {str(e)}")
         return False
 
 
-# --- دریافت لیست کانال‌ها از API ---
 def get_channels():
+    """دریافت لیست کانال‌ها از API"""
     headers = {"Authorization": f"Bearer {access_token}"}
     try:
         response = requests.get(CHANNEL_API_URL, headers=headers)
         response.raise_for_status()
         channels = response.json()
-        print(f"✅ تعداد {len(channels)} کانال دریافت شد.")
+        logger.info(f"✅ تعداد {len(channels)} کانال دریافت شد.")
         return channels
     except Exception as e:
-        print(f"❌ خطا در دریافت کانال‌ها: {str(e)}")
+        logger.error(f"❌ خطا در دریافت کانال‌ها: {str(e)}")
         return []
 
 
-# --- دریافت آخرین تاریخ پست یک کانال ---
 def get_last_post_date(channel_id):
+    """دریافت آخرین تاریخ پست یک کانال"""
     headers = {"Authorization": f"Bearer {access_token}"}
     try:
         url = POSTS_API_URL.format(id=channel_id)
@@ -70,15 +140,14 @@ def get_last_post_date(channel_id):
         posts = response.json()
         if posts:
             last_post_date = posts[-1].get("date")
-            print(f"آخرین پست کانال {channel_id} در تاریخ {last_post_date}")
+            logger.info(f"آخرین پست کانال {channel_id} در تاریخ {last_post_date}")
             return last_post_date
         return None
     except Exception as e:
-        print(f"❌ خطا در دریافت آخرین پست: {str(e)}")
+        logger.error(f"❌ خطا در دریافت آخرین پست: {str(e)}")
         return None
 
 
-# --- ارسال پست‌ها به API ---
 def normalize_datetime(dt_str):
     """یکسان‌سازی فرمت تاریخ‌های مختلف به فرمت استاندارد"""
     dt_str = re.sub(r'[+-]\d{2}:\d{2}$', '', dt_str)
@@ -88,6 +157,7 @@ def normalize_datetime(dt_str):
 
 
 def send_posts_to_api(posts, last_post_date=None):
+    """ارسال پست‌ها به API"""
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json"
@@ -111,23 +181,23 @@ def send_posts_to_api(posts, last_post_date=None):
                 post_to_send = post.copy()
                 post_to_send["message_id"] = 0
 
-                print(f"ارسال پست با تاریخ: {post['date']}")
+                logger.info(f"ارسال پست با تاریخ: {post['date']}")
                 response = requests.post(POST_API_URL, json=post_to_send, headers=headers)
                 response.raise_for_status()
                 success_count += 1
             else:
-                print(f"⏩ پست با تاریخ {post['date']} قبلاً ارسال شده است (رد شد)")
+                logger.info(f"⏩ پست با تاریخ {post['date']} قبلاً ارسال شده است (رد شد)")
 
         except Exception as e:
-            print(f"❌ خطا در پردازش پست: {str(e)}")
+            logger.error(f"❌ خطا در پردازش پست: {str(e)}")
             continue
 
-    print(f"✅ {success_count} از {len(posts)} پست جدید با موفقیت ارسال شد.")
+    logger.info(f"✅ {success_count} از {len(posts)} پست جدید با موفقیت ارسال شد.")
     return success_count > 0
 
 
-# --- توابع کمکی ---
 def persian_date_to_gregorian(persian_date_str):
+    """تبدیل تاریخ شمسی به میلادی"""
     try:
         persian_date_str = persian_date_str.split('، ')[1].strip()
         parts = persian_date_str.split(' ')
@@ -149,6 +219,7 @@ def persian_date_to_gregorian(persian_date_str):
 
 
 def extract_hashtags(text):
+    """استخراج هشتگ‌ها از متن"""
     if not text:
         return ""
     clean_text = re.sub(r'<[^>]+>', '', text)
@@ -163,6 +234,7 @@ def extract_hashtags(text):
 
 
 def clean_post_text(raw_html):
+    """پاک‌سازی متن پست"""
     if not raw_html:
         return "(بدون متن)"
     cleaned_text = re.sub(r'<div class="reactions reactions-block">.*?</div>', '', raw_html, flags=re.DOTALL)
@@ -188,93 +260,64 @@ def clean_post_text(raw_html):
     return cleaned_text.strip() or "(بدون متن)"
 
 
-# --- لاگین به API ---
-if not login_to_api():
-    exit()
+def process_channel(channel):
+    """پردازش یک کانال"""
+    global first_channel
 
-# --- دریافت کانال‌ها ---
-channels = get_channels()
-if not channels:
-    exit()
-
-# --- تنظیمات مرورگر ---
-options = webdriver.ChromeOptions()
-options.add_argument("--start-maximized")
-# options.add_argument("--headless")
-
-try:
-    driver = webdriver.Chrome(options=options)
-    print("✅ مرورگر Chrome با موفقیت راه‌اندازی شد.")
-except Exception as e:
-    print("❌ خطا در راه‌اندازی مرورگر:", str(e))
-    exit()
-
-# --- پردازش هر کانال ---
-first_channel = True
-
-for channel in channels:
     channel_id = channel.get("channel_id")
     channel_name = channel.get("name", "بدون نام")
     my_id = channel.get("id")
-    print(f"\n🔍 شروع پردازش کانال: {channel_name} (ID: {channel_id})")
+    logger.info(f"\n🔍 شروع پردازش کانال: {channel_name} (ID: {channel_id})")
 
-    # --- دریافت آخرین تاریخ پست ---
+    # دریافت آخرین تاریخ پست
     last_post_date = get_last_post_date(my_id)
 
-    # --- باز کردن صفحه کانال ---
+    # باز کردن صفحه کانال
     url = f"https://web.rubika.ir/#c={channel_id}"
-    print(f"🌐 در حال باز کردن: {url}")
+    logger.info(f"🌐 در حال باز کردن: {url}")
 
-    # ابتدا صفحه اصلی را بارگذاری کنید
+    # بازگشت به صفحه اصلی قبل از رفتن به کانال
     driver.get("https://web.rubika.ir/")
     time.sleep(2)
 
-    # سپس به کانال مورد نظر بروید
+    # رفتن به کانال مورد نظر
     driver.get(url)
     time.sleep(5)
 
-    # --- ورود دستی فقط برای اولین کانال ---
-    if first_channel:
-        print("⏳ لطفاً دستی وارد حساب کاربری خود شوید (30 ثانیه فرصت دارید)...")
-        time.sleep(30)
-        first_channel = False
-    else:
-        time.sleep(10)
-
     # بررسی اینکه آیا در صفحه صحیح هستیم
     current_url = driver.current_url
-    print(f"آدرس فعلی: {current_url}")
+    logger.info(f"آدرس فعلی: {current_url}")
 
     if f"c={channel_id}" not in current_url:
-        print(f"❌ خطا در بارگذاری کانال {channel_id}")
-        print("تلاش مجدد...")
+        logger.info(f"❌ خطا در بارگذاری کانال {channel_id}")
+        logger.info("تلاش مجدد...")
         driver.get(url)
         time.sleep(10)
 
         if f"c={channel_id}" not in driver.current_url:
-            print(f"❌❌ خطای جدی: نتوانستیم به کانال {channel_id} برویم. رد شدن از این کانال...")
-            continue
+            logger.info(f"❌❌ خطای جدی: نتوانستیم به کانال {channel_id} برویم. رد شدن از این کانال...")
+            return False
 
-    # --- پیدا کردن کانتینر پیام‌ها ---
-    print("🔍 در حال یافتن کانتینر اسکرول...")
+    # پیدا کردن کانتینر پیام‌ها
+    logger.info("🔍 در حال یافتن کانتینر اسکرول...")
     try:
         chat_container = WebDriverWait(driver, 30).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, ".scrollable.scrollable-y")))
-        print("✅ کانتینر اسکرول پیدا شد.")
+        logger.info("✅ کانتینر اسکرول پیدا شد.")
     except TimeoutException:
-        print("❌ کانتینر اسکرول پیدا نشد.")
-        continue
+        logger.error("❌ کانتینر اسکرول پیدا نشد.")
+        return False
 
-    # --- قرار دادن موس در موقعیت مناسب ---
-    print("\n⚠️ قرار دادن موس در وسط کانتینر...")
+    # قرار دادن موس در موقعیت مناسب
+    logger.info("\n⚠️ قرار دادن موس در وسط کانتینر...")
     try:
         first_message = chat_container.find_element(By.CSS_SELECTOR, "[data-msg-id]")
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", first_message)
         time.sleep(2)
     except:
-        print("⚠️ نتوانستم پیامی برای قرار دادن موس پیدا کنم، ادامه می‌دهم...")
+        logger.warning("⚠️ نتوانستم پیامی برای قرار دادن موس پیدا کنم، ادامه می‌دهم...")
 
-    # --- شروع جمع‌آوری پیام‌ها ---
+    # شروع جمع‌آوری پیام‌ها
     seen_msg_ids = set()
     messages_data = []
     scroll_count = 0
@@ -282,11 +325,11 @@ for channel in channels:
     last_processed_date = None
     reached_last_post = False
 
-    print("🔄 شروع اسکرول به بالا برای بارگذاری پیام‌ها...")
+    logger.info("🔄 شروع اسکرول به بالا برای بارگذاری پیام‌ها...")
 
     while not reached_last_post:
         scroll_count += 1
-        print(f"\n--- اسکرول شماره {scroll_count} ---")
+        logger.info(f"\n--- اسکرول شماره {scroll_count} ---")
 
         prev_scroll_top = driver.execute_script("return arguments[0].scrollTop;", chat_container)
         driver.execute_script("arguments[0].scrollTop = arguments[0].scrollTop - 500;", chat_container)
@@ -306,7 +349,7 @@ for channel in channels:
                             last_processed_date = current_date
 
                             if last_post_date and current_date <= datetime.strptime(last_post_date, '%Y-%m-%d').date():
-                                print(f"✅ به تاریخ آخرین پست ({last_post_date}) رسیدیم.")
+                                logger.info(f"✅ به تاریخ آخرین پست ({last_post_date}) رسیدیم.")
                                 reached_last_post = True
                                 break
                     except:
@@ -327,7 +370,7 @@ for channel in channels:
 
         if current_scroll_top == prev_scroll_top:
             if not new_messages_found:
-                print("⏳ اسکرول تغییری نکرد. بررسی نهایی...")
+                logger.info("⏳ اسکرول تغییری نکرد. بررسی نهایی...")
                 time.sleep(3)
 
                 driver.execute_script("arguments[0].scrollTop = arguments[0].scrollTop - 100;", chat_container)
@@ -335,15 +378,15 @@ for channel in channels:
 
                 current_scroll_top = driver.execute_script("return arguments[0].scrollTop;", chat_container)
                 if current_scroll_top == prev_scroll_top:
-                    print("⏸️ به نظر می‌رسد به ابتدای تاریخچه رسیده‌ایم.")
+                    logger.info("⏸️ به نظر می‌رسد به ابتدای تاریخچه رسیده‌ایم.")
                     break
             else:
-                print("🔍 پیام‌های جدید پیدا شد، ادامه اسکرول...")
+                logger.info("🔍 پیام‌های جدید پیدا شد، ادامه اسکرول...")
         else:
-            print(f"📊 مجموع پیام‌های یکتا: {len(seen_msg_ids)}")
+            logger.info(f"📊 مجموع پیام‌های یکتا: {len(seen_msg_ids)}")
 
-    # --- استخراج نهایی پیام‌ها ---
-    print("\n📥 در حال استخراج نهایی پیام‌ها...")
+    # استخراج نهایی پیام‌ها
+    logger.info("\n📥 در حال استخراج نازی پیام‌ها...")
     all_elements = driver.find_elements(By.CSS_SELECTOR, ".bubbles-group[data-msg-id], .bubble.service.is-date")
 
     current_date = datetime.now().date()
@@ -449,19 +492,90 @@ for channel in channels:
                     })
 
         except Exception as e:
-            print(f"❌ خطا در پردازش پیام: {str(e)}")
+            logger.error(f"❌ خطا در پردازش پیام: {str(e)}")
             continue
 
-    # --- ارسال پست‌ها به API ---
+    # ارسال پست‌ها به API
     if messages_data:
-        print(f"\n📤 در حال ارسال پست‌های جدید به API...")
+        logger.info(f"\n📤 در حال ارسال پست‌های جدید به API...")
         if send_posts_to_api(messages_data, last_post_date):
-            print(f"✅ پست‌های جدید کانال {channel_name} با موفقیت ارسال شدند.")
+            logger.info(f"✅ پست‌های جدید کانال {channel_name} با موفقیت ارسال شدند.")
+            return True
         else:
-            print(f"❌ خطا در ارسال پست‌های کانال {channel_name}.")
+            logger.error(f"❌ خطا در ارسال پست‌های کانال {channel_name}.")
+            return False
     else:
-        print("ℹ️ هیچ پست جدیدی برای ارسال پیدا نشد.")
+        logger.info("ℹ️ هیچ پست جدیدی برای ارسال پیدا نشد.")
+        return True
 
-# --- پایان کار ---
-print("\n🔚 اسکریپت با موفقیت انجام شد.")
-# driver.quit()
+
+def run_crawler():
+    """تابع اصلی اجرای کراولر"""
+    global first_channel
+
+    logger.info("🚀 شروع اجرای کراولر...")
+
+    # راه‌اندازی درایور (فقط اگر وجود ندارد)
+    if not setup_driver():
+        return False
+
+    # ورود دستی (فقط یک بار)
+    if not is_logged_in and not manual_login():
+        return False
+
+    # لاگین به API
+    if not login_to_api():
+        return False
+
+    # دریافت کانال‌ها
+    channels = get_channels()
+    if not channels:
+        return False
+
+    # پردازش هر کانال
+    success_count = 0
+
+    for channel in channels:
+        try:
+            if process_channel(channel):
+                success_count += 1
+        except Exception as e:
+            logger.error(f"❌ خطا در پردازش کانال {channel.get('name')}: {str(e)}")
+            logger.error(traceback.format_exc())
+
+    logger.info(f"🔚 اجرای کراولر کامل شد. {success_count} از {len(channels)} کانال پردازش شدند.")
+    return success_count > 0
+
+
+def cleanup():
+    """تمیزکاری هنگام خروج"""
+    global driver
+    if driver:
+        try:
+            driver.quit()
+            logger.info("✅ مرورگر بسته شد.")
+        except:
+            pass
+
+
+if __name__ == "__main__":
+    try:
+        # اولین اجرا را فوری انجام بده
+        run_crawler()
+
+        # برنامه‌ریزی برای اجرای بعدی هر 3 ساعت
+        schedule.every(3).hours.do(run_crawler)
+
+        logger.info("⏰ برنامه به صورت خودکار هر 3 ساعت اجرا می‌شود...")
+
+        while True:
+            schedule.run_pending()
+            time.sleep(60)  # هر دقیقه چک می‌کند
+
+    except KeyboardInterrupt:
+        logger.info("⏹️ دریافت سیگنال توقف...")
+    except Exception as e:
+        logger.error(f"❌ خطای غیرمنتظره: {str(e)}")
+        logger.error(traceback.format_exc())
+    finally:
+        cleanup()
