@@ -5,7 +5,12 @@ import time
 from datetime import datetime
 import schedule
 import logging
+import os
+from dotenv import load_dotenv
 
+load_dotenv(dotenv_path=".env")
+# --- تنظیمات API ---
+BASE_API_URL = os.getenv("BASE_API_URL")
 # --- تنظیمات لاگ‌گیری ---
 logging.basicConfig(
     level=logging.INFO,
@@ -18,16 +23,16 @@ logging.basicConfig(
 
 # --- تنظیمات ---
 BOT_TOKENS = [
-    "1366796528:wUEJgZXfqDqNZBEnzlh2bhfLAJtwtcMcZjLFFHBs",
+    os.getenv("BOT_TOKEN_3")
     # اینجا می‌توانید توکن‌های دیگر را اضافه کنید
     # "توکن_ربات_جدید",
 ]
 
 # --- API URLs ---
-AUTHOR_API_URL = "http://185.204.197.17:8000/sapi/rep/authors-update/"
-CHANNEL_API_URL = "http://185.204.197.17:8000/sapi/rep/channel-code/?platform=2"
-POST_API_URL = "http://185.204.197.17:8000/sapi/rep/posts/"
-LOGIN_URL = "http://185.204.197.17:8000/sapi/token/"
+AUTHOR_API_URL = f"{BASE_API_URL}/rep/authors-update/"
+CHANNEL_API_URL = f"{BASE_API_URL}/rep/channel-code/?platform=2"
+POST_API_URL = f"{BASE_API_URL}/rep/posts/"
+LOGIN_URL = f"{BASE_API_URL}/token/"
 
 # --- فایل ذخیره پیام‌های دیده‌شده ---
 SEEN_FILE = "seen_messages.json"
@@ -122,7 +127,7 @@ def extract_message_data(update: dict):
         'sender_name': f"{from_user.get('first_name', '')} {from_user.get('last_name', '')}".strip(),
         'sender_family': f"{from_user.get('last_name', '')}".strip(),
         'sender_username': from_user.get('username'),
-        'post_text': message.get('text'),
+        'post_text': message.get('text', '') or message.get('caption', '') or 'None',
         'has_media': any(k in message for k in ['photo', 'video', 'document']),
         'entities': message.get('entities', []),
         'photo_file_id': message.get('photo', [{}])[-1].get('file_id') if message.get('photo') else None,
@@ -154,7 +159,7 @@ def extract_message_data(update: dict):
         'forward_origin_sender_name': f"{forward_origin.get('sender_user', {}).get('first_name', '')} {forward_origin.get('sender_user', {}).get('last_name', '')}".strip(),
         'reply_to_message_id': message.get('reply_to_message', {}).get('message_id'),
         'collected_at': datetime.now().strftime('%Y-%m-%d'),  # فقط تاریخ
-        'caption': text,
+        # 'caption': text,
         'hashtags': hashtags,
     }
 
@@ -274,7 +279,7 @@ def main():
     logging.info("شروع فرآیند جمع‌آوری داده...")
 
     # ورود به سیستم و گرفتن توکن
-    access_token = get_jwt_tokens("su-admin", "SuAdmin@1404")
+    access_token = get_jwt_tokens(os.getenv("API_USERNAME"), os.getenv("API_PASSWORD"))
     if not access_token:
         logging.error("ورود ناموفق. برنامه متوقف شد.")
         return

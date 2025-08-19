@@ -2,8 +2,12 @@ import pandas as pd
 import requests
 from datetime import datetime
 from typing import Optional, Dict, Any, List
+from dotenv import load_dotenv
+import os
 
-BOT_TOKEN = "286348672:"
+load_dotenv(dotenv_path=".env")
+
+BOT_TOKEN = os.getenv("BOT_TOKEN_2")
 BASE_URL = f"https://tapi.bale.ai/bot{BOT_TOKEN}"
 
 # TARGET_CHAT_ID = "iranemankhososi"  # می‌تواند عددی (برای چت خصوصی) یا @ChannelName باشد

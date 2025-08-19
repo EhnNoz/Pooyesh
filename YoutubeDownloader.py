@@ -2,8 +2,13 @@ import subprocess
 import pandas as pd
 import time
 import json
+from dotenv import load_dotenv
+import os
 
-df = pd.read_excel('files/yt06.xlsx', index_col=False)
+load_dotenv(dotenv_path=".env")
+
+
+df = pd.read_excel('files/arbaeen.xlsx', index_col=False)
 my_list = df['لینک مطلب'].tolist()
 MAX_SIZE_BYTES = 100 * 1024 * 1024
 output_template = "%(title)s.%(ext)s"
@@ -12,7 +17,7 @@ for index, item in enumerate(my_list):
 
     url = item
     print(index)
-    proxy = ""  # مثال: Tor SOCKS Proxy
+    proxy = os.getenv("PROXY")
     download_folder = r"F:\sourcecode\Instaloader\youtube/"
 
     MAX_SIZE_MB = 100  # حداکثر حجم مجاز به مگابایت

@@ -14,7 +14,10 @@ from datetime import time as tme
 from datetime import datetime, timedelta
 import jdatetime
 import schedule
+from dotenv import load_dotenv
+import os
 
+load_dotenv(dotenv_path=".env")
 # driver = setup_driver()
 # try:
 #     driver.get("https://eitaa.com/basijsayberi/")
@@ -25,10 +28,11 @@ import schedule
 #     driver.quit()
 
 # --- تنظیمات API ---
-LOGIN_URL = "http://185.204.197.17:8000/sapi/token/"
-CHANNEL_API_URL = "http://185.204.197.17:8000/sapi/rep/channel-code/?platform=1"
-POSTS_API_URL = "http://185.204.197.17:8000/sapi/rep/posts/?platform=1&channel="
-POST_API_URL = "http://185.204.197.17:8000/sapi/rep/posts/"
+BASE_API_URL = os.getenv("BASE_API_URL")
+LOGIN_URL = f"{BASE_API_URL}/token/"
+CHANNEL_API_URL = f"{BASE_API_URL}/rep/channel-code/?platform=1"
+POSTS_API_URL = f"{BASE_API_URL}/rep/posts/?platform=1&channel="
+POST_API_URL = f"{BASE_API_URL}/rep/posts/"
 
 # --- توکن احراز هویت ---
 HEADERS = {
@@ -80,25 +84,25 @@ def get_channels_from_api(access_token):
 
 # --- دریافت آخرین پست هر کانال از API ---
 def get_last_post_info(channel_id, access_token):
-    """دریافت آخرین پست کانال از طریق API"""
+    """دریافت آخرین پست کانال با توانایی تجدید توکن"""
     try:
         set_auth_header(access_token)
         url = f"{POSTS_API_URL}{channel_id}"
-        response = requests.get(url, headers=HEADERS)
-        response.raise_for_status()
+
+        response = make_authenticated_request(url, HEADERS)
+        if not response:
+            return None, None
+
         posts = response.json()
         if not posts:
             print(f"⚠️ هیچ پستی برای کانال {channel_id} یافت نشد")
             return None, None
-        # آخرین پست بر اساس date
+
         last_post = max(posts, key=lambda x: x['date'])
         print(f"✅ آخرین پست کانال {channel_id}: message_id={last_post['message_id']}, sent_at={last_post['date']}")
         return last_post['message_id'], last_post['date']
-    except requests.exceptions.HTTPError as err:
-        print(f"❌ خطا در دریافت پست‌های کانال {channel_id} (کد {response.status_code}): {response.text}")
-        return None, None
     except Exception as e:
-        print(f"❌ خطا در اتصال به API پست‌ها برای کانال {channel_id}: {e}")
+        print(f"❌ خطای غیرمنتظره در دریافت پست‌ها برای کانال {channel_id}: {e}")
         return None, None
 
 # --- تبدیل اعداد فارسی/عربی به انگلیسی ---
@@ -157,7 +161,7 @@ def shamsi_to_miladi(persian_date_str):
 
 # --- استخراج هشتگ‌ها ---
 def extract_hashtags(text):
-    hashtags = re.findall(r'#\S+', text)
+    hashtags = re.findall(r'#\w+', text)
     return ' '.join(hashtags) if hashtags else ""
 
 # --- تنظیمات مرورگر ---
@@ -472,6 +476,44 @@ def crawl_channel(driver, channel_id, channel_name, my_id, last_sent_at=None):
 
     return collected_data
 
+
+def make_authenticated_request(url, headers, max_retries=2):
+    """
+    ارسال درخواست با توکن و تلاش مجدد در صورت منقضی شدن توکن
+    """
+    global access_token  # اجازه دسترسی به توکن جهانی
+    for attempt in range(max_retries + 1):
+        try:
+            response = requests.get(url, headers=headers)
+            if response.status_code == 401:
+                try:
+                    error_detail = response.json().get("messages", [{}])[0].get("message", "")
+                except:
+                    error_detail = ""
+                if "Token is expired" in error_detail or "not valid" in error_detail:
+                    print("🔁 توکن منقضی شده است. در حال دریافت توکن جدید...")
+                    new_token = get_jwt_tokens(os.getenv("API_USERNAME"), os.getenv("API_PASSWORD"))
+                    if new_token:
+                        access_token = new_token
+                        set_auth_header(access_token)
+                        headers = HEADERS  # هدر را با توکن جدید بروزرسانی کن
+                        continue  # دوباره درخواست بده
+                    else:
+                        print("❌ دریافت توکن جدید ناموفق بود.")
+                        return None
+                else:
+                    print(f"❌ دسترسی رد شد (401): {response.text}")
+                    return None
+            elif response.status_code != 200:
+                print(f"❌ خطا در دریافت داده از {url} (کد {response.status_code}): {response.text}")
+                return None
+            return response
+        except Exception as e:
+            print(f"❌ خطا در اتصال به {url} (تلاش {attempt + 1}): {e}")
+            if attempt >= max_retries:
+                return None
+            time.sleep(2)
+    return None
 # ================================
 # 🔁 تابع اصلی اجرا (هر 6 ساعت یکبار)
 # ================================
@@ -511,7 +553,7 @@ def run_crawler():
             channel_data.sort(key=lambda x: x['sent_at_datetime'])
 
             # current_message_id = last_message_id + 1 if last_message_id else 1
-            TIME_OFFSET = timedelta(hours=3, minutes=30)
+            TIME_OFFSET = timedelta(hours=0, minutes=0)
             for item in channel_data:
                 # تبدیل sent_at به datetime
                 sent_at_dt = datetime.strptime(item['sent_at'], "%Y-%m-%d %H:%M:%S")
@@ -567,7 +609,7 @@ if __name__ == "__main__":
     run_crawler()
 
     # # برنامه‌ریزی برای اجرای بعدی هر 6 ساعت
-    schedule.every(12).hours.do(run_crawler)
+    schedule.every(1).hours.do(run_crawler)
     #
     print("⏰ برنامه به صورت خودکار هر 6 ساعت اجرا می‌شود...")
     while True:

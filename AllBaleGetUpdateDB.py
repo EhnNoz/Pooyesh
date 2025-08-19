@@ -4,11 +4,14 @@ from datetime import datetime
 from typing import List, Dict, Any
 import psycopg2
 from sqlalchemy import create_engine, text
+from dotenv import load_dotenv
+import os
 
+load_dotenv(dotenv_path=".env")
 # اطلاعات ربات‌ها
 BOTS = {
     "robot1": {
-        "token": "",
+        "token": os.getenv("BOT_TOKEN_2"),
         "base_url": "https://tapi.bale.ai/bot"
     }
     # می‌توانید ربات‌های بیشتری اضافه کنید
@@ -19,7 +22,7 @@ BOTS = {
 }
 
 # تنظیمات اتصال به PostgreSQL با SQLAlchemy
-DATABASE_URI = "postgresql://....:......@10.../......"
+DATABASE_URI = os.getenv("DATABASE_URL_1")
 
 # ایجاد موتور اتصال
 engine = create_engine(DATABASE_URI, pool_size=20, max_overflow=100)
@@ -30,11 +33,12 @@ def get_all_updates(bot_name: str, offset: int = 0, limit: int = 100) -> List[Di
     all_results = []
     bot_info = BOTS[bot_name]
     base_url = bot_info['base_url']
+    token = bot_info['token']
 
     while True:
         params = {'offset': offset, 'timeout': 10}
         try:
-            response = requests.get(f"{base_url}/getUpdates", params=params)
+            response = requests.get(f"{base_url}{token}/getUpdates", params=params)
             response.raise_for_status()
             results = response.json().get('result', [])
 
