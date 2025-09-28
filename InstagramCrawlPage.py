@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 load_dotenv(dotenv_path=".env")
 # تنظیمات API
-BASE_API_URL = os.getenv("BASE_API_URL")
+BASE_API_URL = os.getenv("BASE_API_URL_TMP")
 LOGIN_URL = f"{BASE_API_URL}/token/"
 CHANNEL_API_URL = f"{BASE_API_URL}/rep/channel-code/?platform=5"
 POSTS_API_URL = f"{BASE_API_URL}/rep/posts/?platform=5&channel={{id}}"
@@ -77,6 +77,46 @@ def get_auth_headers():
     }
 
 
+def make_authenticated_request(method, url, max_retries=2, **kwargs):
+    """
+    انجام درخواست با احراز هویت و تلاش مجدد در صورت خطای احراز هویت
+    """
+    for attempt in range(max_retries):
+        try:
+            headers = get_auth_headers()
+            if 'headers' in kwargs:
+                kwargs['headers'].update(headers)
+            else:
+                kwargs['headers'] = headers
+
+            response = requests.request(method, url, **kwargs)
+
+            # اگر توکن منقضی شده باشد (کد 401)، لاگین مجدد و تلاش دوباره
+            if response.status_code == 401 and attempt < max_retries - 1:
+                logger.info("🔄 توکن منقضی شده. در حال لاگین مجدد و تلاش دوباره...")
+                global access_token, token_expiration
+                access_token = None
+                token_expiration = None
+                continue
+
+            response.raise_for_status()
+            return response
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 401 and attempt < max_retries - 1:
+                logger.info("🔄 توکن منقضی شده. در حال لاگین مجدد و تلاش دوباره...")
+                access_token = None
+                token_expiration = None
+                continue
+            else:
+                raise e
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise e
+            logger.warning(f"⚠️ خطا در درخواست (تلاش {attempt + 1}/{max_retries}): {str(e)}")
+            time.sleep(1)  # تأثیر کمی قبل از تلاش مجدد
+
+
 def convert_stats_to_number(stat_str):
     """
     تبدیل مقادیر لایک و کامنت از فرمت‌های مانند 1.5k, 1.5m به عدد
@@ -86,9 +126,9 @@ def convert_stats_to_number(stat_str):
 
     stat_str = str(stat_str).lower().strip()
     if 'k' in stat_str:
-        return int(float(stat_str.replace('k', ''))) * 1000
+        return int(float(stat_str.replace('k', '')) * 1000)
     elif 'm' in stat_str:
-        return int(float(stat_str.replace('m', ''))) * 1000000
+        return int(float(stat_str.replace('m', '')) * 1000000)
     else:
         try:
             return int(stat_str)
@@ -170,7 +210,7 @@ def get_post_details(post_url):
             return None
 
         soup = BeautifulSoup(response.text, 'html.parser')
-        post_card = soup.find('div', class_='card sm:w-1/2 mx-2 sm:mx-auto bg-base-100 shadow-xl relative')
+        post_card = soup.find('div', class_='card sm:w-1/2 mx-2 sm:mx-auto bg-base-100 shadow-xl relative dark:bg-slate-900')
 
         if not post_card:
             return None
@@ -218,12 +258,12 @@ def get_post_details(post_url):
 
 def get_channel_posts(channel_id, channel_name):
     """دریافت پست‌های یک کانال و پردازش آنها"""
-    headers = get_auth_headers()
     url = POSTS_API_URL.format(id=channel_id)
 
     try:
-        response = requests.get(url, headers=headers, timeout=30)
-        response.raise_for_status()
+        print("******************")
+        response = make_authenticated_request('GET', url, timeout=30)
+        print("++++++++++++++++++")
         existing_posts = response.json()
         existing_message_ids = {str(post['message_id'])[-7:] for post in existing_posts}
     except Exception as e:
@@ -243,31 +283,39 @@ def get_channel_posts(channel_id, channel_name):
             return []
 
         soup = BeautifulSoup(response.text, 'html.parser')
-        post_cards = soup.find_all('div', class_='card w-96 bg-base-100 shadow-xl', limit=20)
+        post_cards = soup.find_all('div',
+                                   class_='group overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition hover:shadow-md dark:border-slate-800 dark:bg-slate-900',
+                                   limit=20)
 
         messages_data = []
 
         for card in post_cards:
             try:
                 # استخراج اطلاعات پایه
-                post_link = "https://dumpor.io" + card.find('a')['href'] if card.find('a') else 'N/A'
-                image_url = card.find('img')['src'] if card.find('img') else 'N/A'
-                title = card.find('figure').find('img')['alt'] if card.find('figure') and card.find('figure').find(
-                    'img') else 'N/A'
+                post_link_element = card.find('a')
+                post_link = "https://dumpor.io" + post_link_element['href'] if post_link_element else 'N/A'
 
-                card_body = card.find('div', class_='card-body sm:h-32 overflow-clip pb-3')
-                post_text = card_body.find('p').get_text(strip=True) if card_body and card_body.find('p') else 'N/A'
+                image_element = card.find('img')
+                image_url = image_element['src'] if image_element else 'N/A'
+
+                title = image_element['alt'] if image_element and image_element.get('alt') else 'N/A'
+
+                # استخراج متن پست - استفاده از کلاس صحیح
+                card_body = card.find('p', class_='text-sm leading-6 text-slate-800 dark:text-slate-100 line-clamp-3')
+                post_text = card_body.get_text(strip=True) if card_body else 'N/A'
 
                 # استخراج جزئیات بیشتر از صفحه پست
                 post_details = get_post_details(post_link) if post_link != 'N/A' else None
 
-                # استخراج message_id
-                msg_id = post_link.split('/')[-1][-7:] if post_link != 'N/A' else None
+                # استخراج message_id از لینک
+                msg_id = post_link.split('/c/')[-1] if '/c/' in post_link else None
                 if not msg_id:
                     continue
 
-                if msg_id[0] == '0':
-                    msg_id = '1' + msg_id[1:]
+                # حذف کاراکترهای غیرعددی و گرفتن 7 رقم آخر
+                msg_id = ''.join(filter(str.isdigit, msg_id))[-7:]
+                if not msg_id:
+                    continue
 
                 # اگر پست قبلاً وجود دارد، از پردازش صرف‌نظر می‌کنیم
                 if msg_id in existing_message_ids:
@@ -283,9 +331,15 @@ def get_channel_posts(channel_id, channel_name):
                     entities.append(image_url)
                 entities.extend(mentions)
 
-                # محاسبه views (20 برابر لایک‌ها)
+                # محاسبه views بر اساس نوع محتوا
                 likes = convert_stats_to_number(post_details['likes']) if post_details else 0
-                views = likes * 20
+
+                # اگر محتوا ویدیو است: views = likes * 20
+                # اگر محتوا عکس است: views = 0
+                if post_details and post_details['content_type'] == 'video':
+                    views = likes * 20
+                else:
+                    views = 0
 
                 # تاریخ پست
                 if post_details and post_details['actual_post_time'] != 'N/A':
@@ -329,7 +383,6 @@ def send_posts_to_api(posts_data):
     if not posts_data:
         return True
 
-    headers = get_auth_headers()
     success_count = 0
 
     try:
@@ -337,10 +390,10 @@ def send_posts_to_api(posts_data):
             try:
                 # حذف فیلدهای موقتی
                 post_to_send = post.copy()
-                post_to_send.pop('likes', None)
-                post_to_send.pop('comments', None)
+                # post_to_send.pop('likes', None)
+                # post_to_send.pop('comments', None)
 
-                response = requests.post(POST_API_URL, json=post_to_send, headers=headers, timeout=30)
+                response = make_authenticated_request('POST', POST_API_URL, json=post_to_send, timeout=30)
                 response.raise_for_status()
                 success_count += 1
                 logger.info(f"✅ پست با شناسه {post['message_id']} با موفقیت ارسال شد.")
@@ -366,9 +419,7 @@ def run_crawler():
 
     # دریافت لیست کانال‌ها
     try:
-        headers = get_auth_headers()
-        response = requests.get(CHANNEL_API_URL, headers=headers, timeout=30)
-        response.raise_for_status()
+        response = make_authenticated_request('GET', CHANNEL_API_URL, timeout=30)
         channels = response.json()
         logger.info(f"📊 تعداد {len(channels)} کانال برای پردازش دریافت شد.")
     except Exception as e:

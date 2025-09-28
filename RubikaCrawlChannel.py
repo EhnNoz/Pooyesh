@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 import schedule
 import logging
 import traceback
+import random
 
 # تنظیمات لاگ‌گیری
 logging.basicConfig(
@@ -132,10 +133,30 @@ def get_channels():
 
 def get_last_post_date(channel_id):
     """دریافت آخرین تاریخ پست یک کانال"""
+    global access_token
+
+    # اگر توکن وجود ندارد، لاگین مجدد
+    if not access_token:
+        logger.warning("توکن دسترسی وجود ندارد. تلاش برای لاگین مجدد...")
+        if not login_to_api():
+            logger.error("❌ لاگین مجدد برای دریافت آخرین پست ناموفق بود.")
+            return None
+
     headers = {"Authorization": f"Bearer {access_token}"}
     try:
         url = POSTS_API_URL.format(id=channel_id)
         response = requests.get(url, headers=headers)
+
+        # اگر 401 خورد، یعنی توکن منقضی شده — لاگین مجدد و تلاش دوباره
+        if response.status_code == 401:
+            logger.warning("توکن منقضی شده در دریافت آخرین پست. تلاش برای لاگین مجدد...")
+            if login_to_api():
+                headers["Authorization"] = f"Bearer {access_token}"
+                response = requests.get(url, headers=headers)  # Retry
+            else:
+                logger.error("❌ لاگین مجدد ناموفق. دریافت آخرین پست متوقف شد.")
+                return None
+
         response.raise_for_status()
         posts = response.json()
         if posts:
@@ -179,7 +200,18 @@ def send_posts_to_api(posts, last_post_date=None):
 
             if last_post_datetime is None or post_datetime > last_post_datetime:
                 post_to_send = post.copy()
-                post_to_send["message_id"] = 0
+                # post_to_send["message_id"] = 0
+                # تولید message_id شش رقمی بر اساس تاریخ + عدد رندوم
+                post_datetime_str = post["date"].replace("-", "").replace(":", "").replace(" ", "")[
+                                    :14]  # YYYYMMDDHHMMSS
+                base_num = int(post_datetime_str) % 1000000  # گرفتن باقی‌مانده برای ۶ رقمی شدن
+                random_part = random.randint(100, 999)  # عدد رندوم ۳ رقمی برای اطمینان از منحصربه‌فرد بودن
+                message_id = (base_num * 1000 + random_part) % 1000000  # ترکیب و محدود کردن به ۶ رقم
+
+                # اگر عدد کمتر از ۶ رقم شد، با صفر پر کن
+                message_id = int(str(message_id).zfill(6)[:6])
+
+                post_to_send["message_id"] = message_id
 
                 logger.info(f"ارسال پست با تاریخ: {post['date']}")
                 response = requests.post(POST_API_URL, json=post_to_send, headers=headers)
@@ -386,7 +418,7 @@ def process_channel(channel):
             logger.info(f"📊 مجموع پیام‌های یکتا: {len(seen_msg_ids)}")
 
     # استخراج نهایی پیام‌ها
-    logger.info("\n📥 در حال استخراج نازی پیام‌ها...")
+    logger.info("\n📥 در حال استخراج نهایی پیام‌ها...")
     all_elements = driver.find_elements(By.CSS_SELECTOR, ".bubbles-group[data-msg-id], .bubble.service.is-date")
 
     current_date = datetime.now().date()
@@ -436,8 +468,72 @@ def process_channel(channel):
                 except:
                     pass
 
+                # بررسی نوع رسانه و تعیین MIME type
+                document_mime_type = None
+
+                try:
+                    # اولویت ۱: بررسی audio
+                    audio_elem = elem.find_element(By.CSS_SELECTOR, ".audio.corner-download")
+                    if audio_elem:
+                        document_mime_type = "audio/mp3"
+                except NoSuchElementException:
+                    pass
+
+                # اولویت ۲: بررسی video loader
+                if document_mime_type is None:
+                    try:
+                        video_loader = elem.find_element(By.CSS_SELECTOR, ".pre-time")
+                        if video_loader:
+                            document_mime_type = "video/mp4"
+                    except NoSuchElementException:
+                        pass
+
+                # اولویت ۳: بررسی media-photo thumbnail (ویدئو)
+                # if document_mime_type is None:
+                #     try:
+                #         video_thumbnail = elem.find_element(By.CSS_SELECTOR, ".media-photo.thumbnail")
+                #         if video_thumbnail:
+                #             document_mime_type = "video/mp4"
+                #     except NoSuchElementException:
+                #         pass
+
+                # اولویت ۴: بررسی media-photo ساده (تصویر)
+                if document_mime_type is None:
+                    try:
+                        img_elem = elem.find_element(By.CSS_SELECTOR, "img.media-photo[alt]")
+                        if img_elem:
+                            alt_text = img_elem.get_attribute("alt")
+                            # اگر alt وجود دارد و خالی نیست
+                            if alt_text and alt_text.strip() and alt_text != "[تصویر]":
+                                document_mime_type = "image/jpeg"
+                            # حتی اگر alt دقیقاً "[تصویر]" باشد هم تصویر است
+                            elif alt_text == "[تصویر]":
+                                document_mime_type = "image/jpeg"
+                    except NoSuchElementException:
+                        pass
+
+                if document_mime_type is None:
+                    try:
+                        simple_photo = elem.find_element(By.CSS_SELECTOR, ".media-photo")
+                        # اگر thumbnail نبود و قبلاً تشخیص داده نشده
+                        if "thumbnail" not in simple_photo.get_attribute("class"):
+                            document_mime_type = "image/jpeg"
+                    except NoSuchElementException:
+                        pass
+
                 views = 0
                 time_str = "00:00"
+
+                is_forwarded = False
+                try:
+                    forwarded_elem = elem.find_element(By.CSS_SELECTOR, ".message_forwarded_message")
+                    if forwarded_elem:
+                        is_forwarded = True
+                        logger.info(f"🔁 پست {msg_id} فوروارد شده است، views صفر خواهد بود")
+                except NoSuchElementException:
+                    pass
+
+
                 try:
                     time_elem = elem.find_element(By.CSS_SELECTOR, "span[rb-message-time]")
                     inner_html = ""
@@ -447,17 +543,33 @@ def process_channel(channel):
                     except:
                         inner_html = time_elem.get_attribute("innerHTML")
 
-                    views_match = re.search(r'(\d[\d.,]*)\s*<!-{2,}>\s*<!-{2,}>\s*<i[^>]+rbico-channelviews',
+                    views_match = re.search(r'(\d[\d.,]*[KkMm]?)\s*<!-{2,}>\s*<!-{2,}>\s*<i[^>]+rbico-channelviews',
                                             inner_html)
                     if not views_match:
-                        views_match = re.search(r'(\d[\d.,]*)\s*<i[^>]+rbico-channelviews', inner_html)
+                        views_match = re.search(r'(\d[\d.,]*[KkMm]?)\s*<i[^>]+rbico-channelviews', inner_html)
+
                     if views_match:
-                        v = views_match.group(1).replace('M', '000000').replace('K', '000').replace('.', '')
-                        views = int(v) if v.isdigit() else 0
+                        v = views_match.group(1).strip()
+                        # تبدیل واحدهای K و M به عدد
+                        if 'K' in v.upper() or 'k' in v:
+                            # حذف K و تبدیل به عدد
+                            num = float(v.upper().replace('K', '').replace('k', '').replace(',', ''))
+                            views = int(num * 1000)
+                        elif 'M' in v.upper():
+                            # حذف M و تبدیل به عدد
+                            num = float(v.upper().replace('M', '').replace(',', ''))
+                            views = int(num * 1000000)
+                        else:
+                            # عدد معمولی
+                            views = int(v.replace(',', '')) if v.replace(',', '').isdigit() else 0
+
+                        if is_forwarded:
+                            views = 0
 
                     time_match = re.search(r'<span>(\d{1,2}:\d{2})</span>', inner_html)
                     time_str = time_match.group(1) if time_match else "00:00"
-                except:
+                except Exception as e:
+                    logger.error(f"❌ خطا در پردازش views و زمان: {str(e)}")
                     pass
 
                 message_date = current_date
@@ -488,7 +600,8 @@ def process_channel(channel):
                         "forward_from_chat_title": forward_from_chat_title,
                         "collected_at": datetime_combined.strftime('%Y-%m-%d'),
                         "author": 1,
-                        "channel": my_id
+                        "channel": my_id,
+                        "document_mime_type": document_mime_type  # اضافه کردن فیلد جدید
                     })
 
         except Exception as e:
@@ -515,26 +628,21 @@ def run_crawler():
 
     logger.info("🚀 شروع اجرای کراولر...")
 
-    # راه‌اندازی درایور (فقط اگر وجود ندارد)
     if not setup_driver():
         return False
 
-    # ورود دستی (فقط یک بار)
     if not is_logged_in and not manual_login():
         return False
 
-    # لاگین به API
+    # ✅ هر بار که کراولر اجرا می‌شود، دوباره لاگین کنید
     if not login_to_api():
         return False
 
-    # دریافت کانال‌ها
     channels = get_channels()
     if not channels:
         return False
 
-    # پردازش هر کانال
     success_count = 0
-
     for channel in channels:
         try:
             if process_channel(channel):

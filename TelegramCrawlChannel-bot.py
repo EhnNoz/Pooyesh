@@ -1,3 +1,4 @@
+import time
 import requests
 from telethon import TelegramClient, functions, types
 import asyncio
@@ -11,8 +12,6 @@ import os
 
 load_dotenv(dotenv_path=".env")
 
-# from urllib.parse import urlparse
-# from telethon.network.connection import ConnectionTcpMTProxy
 # ——— تنظیمات API ———
 BASE_URL = os.getenv("BASE_API_URL")
 LOGIN_URL = f"{BASE_URL}/token/"
@@ -24,26 +23,13 @@ API_USERNAME = os.getenv("API_USERNAME")
 API_PASSWORD = os.getenv("API_PASSWORD")
 access_token = None
 
-# ——— تنظیمات پراکسی ———
-proxy = {
-   'proxy_type': socks.SOCKS5,
-   'addr': '',  # آدرس سرور پراکسی
-   'port':'',  # پورت پراکسی
-   'username': "",  # اگر پراکسی نیاز به کاربری داشت
-   'password': ""  # رمز عبور پراکسی
-}
+# ——— تنظیمات تلگرام ———
+api_id = 27873457
+api_hash = os.getenv("API_HASH")
+phone = os.getenv("PHONE")
 
-
-
-# # ——— تنظیمات تلگرام ———
-# api_id =  # ← جای خودت بنویس
-# api_hash = ''  # ← جای خودت بنویس
-# phone = ''  # ← شماره خودت
-
-api_id = int(os.getenv("API_ID"))            # ← جای خودت بنویس
-api_hash = os.getenv("API_HASH")     # ← جای خودت بنویس
-phone = os.getenv("PHONE")        # ← شماره خودت
-# channel_username = '@war724'  # مثلاً 'python_farsi'
+# ——— کلاینت تلگرام مشترک ———
+client = None
 
 
 # ——— توابع کمکی ———
@@ -66,6 +52,12 @@ def format_tehran_datetime(dt):
     tehran_tz = pytz.timezone('Asia/Tehran')
     tehran_time = dt.astimezone(tehran_tz)
     return tehran_time.strftime('%Y-%m-%dT%H:%M:%S+03:30')
+
+
+def format_tehran_date(dt):
+    tehran_tz = pytz.timezone('Asia/Tehran')
+    tehran_time = dt.astimezone(tehran_tz)
+    return tehran_time.strftime('%Y-%m-%d')
 
 
 def get_photo_size(photo_size):
@@ -106,7 +98,13 @@ def get_media_info(message):
                     'photo_file_unique_id': photo.access_hash,
                     'photo_width': largest_size.w if largest_size else None,
                     'photo_height': largest_size.h if largest_size else None,
-                    'photo_file_size': get_photo_size(largest_size) if largest_size else None
+                    'photo_file_size': get_photo_size(largest_size) if largest_size else None,
+                    # اضافه کردن اطلاعات document برای عکس
+                    'document_file_id': photo.id,
+                    'document_file_unique_id': photo.access_hash,
+                    'document_file_name': f"photo_{photo.id}.jpg",
+                    'document_mime_type': 'image/jpeg',
+                    'document_file_size': get_photo_size(largest_size) if largest_size else None
                 })
         elif isinstance(message.media, types.MessageMediaDocument):
             doc = message.media.document
@@ -132,7 +130,6 @@ def get_media_info(message):
                     })
     return media_info
 
-
 def get_forward_info(message):
     forward_info = {
         'forward_from_id': None,
@@ -150,7 +147,8 @@ def get_forward_info(message):
 
     if message.fwd_from:
         forward_info['forward_date'] = format_tehran_datetime(message.fwd_from.date) if message.fwd_from.date else None
-        forward_info['forward_from_message_id'] = message.fwd_from.channel_post if hasattr(message.fwd_from, 'channel_post') else None
+        forward_info['forward_from_message_id'] = message.fwd_from.channel_post if hasattr(message.fwd_from,
+                                                                                           'channel_post') else None
 
         if hasattr(message.fwd_from, 'from_id'):
             if isinstance(message.fwd_from.from_id, types.PeerUser):
@@ -161,7 +159,6 @@ def get_forward_info(message):
         if hasattr(message.fwd_from, 'from_name'):
             forward_info['forward_from_name'] = message.fwd_from.from_name
 
-        # بررسی وجود `channel_id` قبل از دسترسی
         if hasattr(message.fwd_from, 'channel_id'):
             forward_info['forward_from_chat_id'] = message.fwd_from.channel_id
 
@@ -220,10 +217,9 @@ def get_channels():
 
 def get_last_message_id(channel_id):
     try:
-        url = f"http://10.32.141.78:8081/sapi/rep/posts/?platform=3&channel={channel_id}"
-        print(get_headers())
+        # url = f"http://10.32.141.78:8081/api/sapi/rep/posts/?platform=3&channel={channel_id}"
+        url = f"http://10.32.213.16:8000/sapi/rep/posts/?platform=3&channel={channel_id}"
         response = requests.get(url, headers=get_headers())
-        print(response.text)
         if response.status_code == 401:  # توکن منقضی شده
             if login():
                 return get_last_message_id(channel_id)
@@ -252,7 +248,11 @@ def send_post_to_api(post_data):
             return False
         if response.status_code in [200, 201]:
             return True
+        print("*********************************************")
+        print(post_data)
+        print("**********************************************")
         print(f"❌ خطا در ارسال پست: {response.text}")
+        print("**********************************************")
         return False
     except Exception as e:
         print(f"❌ خطا در ارسال پست به API: {e}")
@@ -261,12 +261,8 @@ def send_post_to_api(post_data):
 
 # ——— تابع اصلی کرال ———
 async def scrape_channel(channel_username, channel_id):
-    # تنظیم پراکسی
-    # setup_proxy()
+    global client
 
-    # ایجاد کلاینت تلگرام
-    client = TelegramClient(f'session_{channel_id}', api_id, api_hash)
-    await client.start(phone)
     print(f"\n🔍 شروع کرال کانال: {channel_username} (ID: {channel_id})")
 
     try:
@@ -294,9 +290,6 @@ async def scrape_channel(channel_username, channel_id):
     except Exception as e:
         print(f"\n❌ خطا در کرال کانال {channel_username}: {str(e)}")
         return 0
-    finally:
-        await client.disconnect()
-
 
 
 async def get_telegram_messages(client, channel_username, last_message_id=None):
@@ -326,7 +319,8 @@ def process_and_send_message(message, channel_id):
         post_date = format_tehran_datetime(message.date)
 
         # استخراج متن و هشتگ‌ها
-        text = message.text or getattr(message, 'message', '') or (getattr(message.media, 'caption', '') if message.media else '')
+        text = message.text or getattr(message, 'message', '') or (
+            getattr(message.media, 'caption', '') if message.media else '')
         hashtags = ' '.join(extract_hashtags(text)) if text else ''
 
         # دریافت اطلاعات چت
@@ -354,7 +348,7 @@ def process_and_send_message(message, channel_id):
             **get_forward_info(message),
             **get_reply_info(message),
             'views': message.views if hasattr(message, 'views') else 0,
-            'collected_at': datetime.now(pytz.timezone('Asia/Tehran')).strftime('%Y-%m-%d'),
+            'collected_at': format_tehran_date(message.date),
             'author': 1,
             'entities': str(message.entities) if message.entities else '[]'
         }
@@ -384,16 +378,28 @@ def get_sender_info(sender):
         'sender_username': getattr(sender, 'username', None)
     }
 
+
 async def main():
+    global client
+
     # ورود به سیستم
+    print("**************")
     if not login():
         print("❌ امکان ورود به سیستم وجود ندارد")
         return
+
+    # ایجاد کلاینت تلگرام مشترک
+    # setup_proxy()  # اگر نیاز به پراکسی دارید، این خط را فعال کنید
+    client = TelegramClient('session_shared', api_id, api_hash)
+    await client.start(phone)
+    print("✅ کلاینت تلگرام راه‌اندازی شد")
+    time.sleep(10)
 
     # دریافت لیست کانال‌ها
     channels = get_channels()
     if not channels:
         print("❌ هیچ کانالی یافت نشد")
+        await client.disconnect()
         return
 
     print(f"🔍 تعداد کانال‌ها برای کرال: {len(channels)}")
@@ -402,6 +408,11 @@ async def main():
     for channel in channels:
         print(f"\n📡 شروع کرال کانال: {channel['name']} ({channel['channel_id']})")
         await scrape_channel(channel['channel_id'], channel['id'])
+        time.sleep(10)  # تاخیر بین کرال کانال‌های مختلف
+
+    # قطع اتصال از تلگرام
+    await client.disconnect()
+    print("✅ تمام کانال‌ها با موفقیت کرال شدند")
 
 
 if __name__ == '__main__':
